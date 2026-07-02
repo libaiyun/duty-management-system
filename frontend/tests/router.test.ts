@@ -3,10 +3,40 @@ import { describe, expect, it } from 'vitest'
 import { router } from '@/router'
 
 describe('router', () => {
-  it('defines the home route', () => {
+  it('defines the home route as top-level', () => {
     const route = router.getRoutes().find((item) => item.name === 'home')
-
     expect(route?.path).toBe('/')
     expect(route?.meta.title).toBe('工作台')
+  })
+
+  it('defines nested routes for my-duty', () => {
+    const parent = router.getRoutes().find((item) => item.name === 'my-duty')
+    expect(parent?.path).toBe('/my-duty')
+    expect(parent?.children).toBeDefined()
+
+    const schedule = parent?.children?.find((c) => c.name === 'my-schedule')
+    expect(schedule?.path).toBe('/my-duty/schedule')
+    expect(schedule?.meta?.title).toBe('我的排班')
+  })
+
+  it('parent routes redirect to first child', () => {
+    const route = router.getRoutes().find((item) => item.name === 'my-duty')
+    expect(route?.redirect).toBe('/my-duty/schedule')
+  })
+
+  it('all leaf routes have a component', () => {
+    const routes = router.getRoutes()
+    const leafRoutes = routes.filter((r) => r.name && !r.children)
+    for (const route of leafRoutes) {
+      expect(route.components?.default).toBeDefined()
+    }
+  })
+
+  it('all routes have meta title', () => {
+    const routes = router.getRoutes()
+    for (const route of routes) {
+      if (!route.name) continue
+      expect(route.meta.title).toBeTruthy()
+    }
   })
 })
