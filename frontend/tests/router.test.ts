@@ -39,4 +39,19 @@ describe('router', () => {
       expect(route.meta.title).toBeTruthy()
     }
   })
+
+  it('has a 403 route', () => {
+    const forbidden = router.getRoutes().find((r) => r.name === 'forbidden')
+    expect(forbidden).toBeDefined()
+    expect(forbidden?.path).toBe('/403')
+    expect(forbidden?.meta.title).toBe('无权访问')
+  })
+
+  it('non-home leaf routes have permission code assigned', () => {
+    const routes = router.getRoutes()
+    const leafRoutes = routes.filter((r) => r.name && !r.children && r.name !== 'home' && r.name !== 'forbidden')
+    for (const route of leafRoutes) {
+      expect(route.meta.permission).toBeDefined()
+    }
+  })
 })

@@ -44,7 +44,7 @@
           :router="true"
           class="app-sidebar__menu"
         >
-          <template v-for="item in menuItems" :key="item.name">
+          <template v-for="item in visibleMenuItems" :key="item.name">
             <el-sub-menu v-if="item.children && item.children.length" :index="item.path">
               <template #title>
                 <el-icon v-if="item.icon">
@@ -88,6 +88,7 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   ArrowDown,
@@ -97,13 +98,19 @@ import {
   UserFilled,
 } from '@element-plus/icons-vue'
 
-import { menuItems } from '@/config/menu'
+import { filterMenuByPermission, menuItems } from '@/config/menu'
 import { useBreadcrumb } from '@/composables/useBreadcrumb'
 import { useAppStore } from '@/stores/app'
+import { usePermissionStore } from '@/stores/permission'
 
 const appStore = useAppStore()
+const permissionStore = usePermissionStore()
 const route = useRoute()
 const { breadcrumbs } = useBreadcrumb()
+
+const visibleMenuItems = computed(() =>
+  filterMenuByPermission(menuItems, (code) => permissionStore.hasPermission(code)),
+)
 </script>
 
 <style scoped>

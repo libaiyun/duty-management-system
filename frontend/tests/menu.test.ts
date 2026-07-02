@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
-import { menuItems } from '@/config/menu'
+import { filterMenuByPermission, menuItems } from '@/config/menu'
+import type { PermissionCode } from '@/types/permission'
+import { PERMISSION_CODES } from '@/types/permission'
+
+const PC = PERMISSION_CODES
 
 describe('menuItems', () => {
   it('contains the workbench as first menu item', () => {
@@ -45,5 +49,58 @@ describe('menuItems', () => {
     for (const item of menuItems) {
       expect(item.icon).toBeDefined()
     }
+  })
+
+  it('leaf menu items have permission codes assigned', () => {
+    function collectLeaves(items: (typeof menuItems)): (typeof menuItems)[0][] {
+      const leaves: (typeof menuItems)[0][] = []
+      for (const item of items) {
+        if (item.children) {
+          leaves.push(...collectLeaves(item.children))
+        } else {
+          leaves.push(item)
+        }
+      }
+      return leaves
+    }
+    const leaves = collectLeaves(menuItems)
+    expect(leaves.length).toBeGreaterThan(0)
+    for (const leaf of leaves) {
+      if (leaf.name === 'home') continue
+      expect(leaf.permission).toBeDefined()
+    }
+  })
+})
+
+describe('filterMenuByPermission', () => {
+  it('returns all items when user has all permissions', () => {
+    const hasAll = () => true
+    const filtered = filterMenuByPermission(menuItems, hasAll)
+    expect(filtered.length).toBe(menuItems.length)
+  })
+
+  it('hides items without matching permission', () => {
+    const hasNone = () => false
+    const filtered = filterMenuByPermission(menuItems, hasNone)
+    expect(filtered.length).toBe(1)
+    expect(filtered[0].name).toBe('home')
+  })
+
+  it('shows parent group only if it has visible children', () => {
+    const onlyDutySchedule = (code: PermissionCode) => code === PC.DUTY_SCHEDULE_VIEW_SELF
+    const filtered = filterMenuByPermission(menuItems, onlyDutySchedule)
+
+    const myDuty = filtered.find((item) => item.name === 'my-duty')
+    expect(myDuty).toBeDefined()
+    expect(myDuty?.children).toHaveLength(1)
+    expect(myDuty?.children?.[0].name).toBe('my-schedule')
+  })
+
+  it('hides entire group when no children are visible', () => {
+    const hasNone = () => false
+    const filtered = filterMenuByPermission(menuItems, hasNone)
+
+    const myDuty = filtered.find((item) => item.name === 'my-duty')
+    expect(myDuty).toBeUndefined()
   })
 })
