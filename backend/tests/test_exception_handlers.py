@@ -1,8 +1,12 @@
+from collections.abc import Generator
+
+import pytest
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from app.api.deps import get_page_params
+from app.core.config import Settings
 from app.core.exceptions import (
     BadRequestError,
     BusinessRuleError,
@@ -20,8 +24,9 @@ class Item(BaseModel):
     name: str
 
 
-def build_test_app() -> FastAPI:
-    app = create_app()
+@pytest.fixture
+def exception_app(test_settings: Settings) -> FastAPI:
+    app = create_app(settings=test_settings)
 
     @app.get("/test/bad-request")
     def bad_request() -> None:
@@ -86,8 +91,23 @@ def build_test_app() -> FastAPI:
     return app
 
 
-def test_app_exception_handlers_return_unified_error_shape() -> None:
-    client = TestClient(build_test_app())
+@pytest.fixture
+def exception_client(exception_app: FastAPI) -> Generator[TestClient, None, None]:
+    with TestClient(exception_app) as client:
+        yield client
+
+
+@pytest.fixture
+def exception_client_no_raise(
+    exception_app: FastAPI,
+) -> Generator[TestClient, None, None]:
+    with TestClient(exception_app, raise_server_exceptions=False) as client:
+        yield client
+
+
+def test_app_exception_handlers_return_unified_error_shape(
+    exception_client: TestClient,
+) -> None:
     cases = [
         ("/test/bad-request", 400, "VALIDATION_ERROR"),
         ("/test/unauthorized", 401, "UNAUTHORIZED"),
@@ -98,7 +118,7 @@ def test_app_exception_handlers_return_unified_error_shape() -> None:
     ]
 
     for path, status_code, code in cases:
-        response = client.get(path, headers={"X-Trace-Id": "trace-for-test"})
+        response = exception_client.get(path, headers={"X-Trace-Id": "trace-for-test"})
         body = response.json()
 
         assert response.status_code == status_code
@@ -107,10 +127,13 @@ def test_app_exception_handlers_return_unified_error_shape() -> None:
         assert body["trace_id"] == "trace-for-test"
 
 
-def test_http_exception_handler_returns_unified_error_shape() -> None:
-    client = TestClient(build_test_app())
-
-    response = client.get("/test/http-not-found", headers={"X-Trace-Id": "trace-404"})
+def test_http_exception_handler_returns_unified_error_shape(
+    exception_client: TestClient,
+) -> None:
+    response = exception_client.get(
+        "/test/http-not-found",
+        headers={"X-Trace-Id": "trace-404"},
+    )
 
     assert response.status_code == 404
     assert response.json() == {
@@ -120,10 +143,10 @@ def test_http_exception_handler_returns_unified_error_shape() -> None:
     }
 
 
-def test_http_exception_handler_preserves_headers() -> None:
-    client = TestClient(build_test_app())
-
-    response = client.get(
+def test_http_exception_handler_preserves_headers(
+    exception_client: TestClient,
+) -> None:
+    response = exception_client.get(
         "/test/http-unauthorized",
         headers={"X-Trace-Id": "trace-401"},
     )
@@ -137,10 +160,10 @@ def test_http_exception_handler_preserves_headers() -> None:
     }
 
 
-def test_http_exception_handler_accepts_nonstandard_status_code() -> None:
-    client = TestClient(build_test_app())
-
-    response = client.get(
+def test_http_exception_handler_accepts_nonstandard_status_code(
+    exception_client: TestClient,
+) -> None:
+    response = exception_client.get(
         "/test/http-custom-status",
         headers={"X-Trace-Id": "trace-499"},
     )
@@ -153,10 +176,8 @@ def test_http_exception_handler_accepts_nonstandard_status_code() -> None:
     }
 
 
-def test_validation_error_handler_returns_details() -> None:
-    client = TestClient(build_test_app())
-
-    response = client.get("/test/validation")
+def test_validation_error_handler_returns_details(exception_client: TestClient) -> None:
+    response = exception_client.get("/test/validation")
     body = response.json()
 
     assert response.status_code == 400
@@ -166,10 +187,13 @@ def test_validation_error_handler_returns_details() -> None:
     assert body["details"][0]["field"] == "query.limit"
 
 
-def test_unexpected_exception_handler_returns_500_shape() -> None:
-    client = TestClient(build_test_app(), raise_server_exceptions=False)
-
-    response = client.get("/test/unexpected", headers={"X-Trace-Id": "trace-500"})
+def test_unexpected_exception_handler_returns_500_shape(
+    exception_client_no_raise: TestClient,
+) -> None:
+    response = exception_client_no_raise.get(
+        "/test/unexpected",
+        headers={"X-Trace-Id": "trace-500"},
+    )
 
     assert response.status_code == 500
     assert response.json() == {
@@ -179,10 +203,8 @@ def test_unexpected_exception_handler_returns_500_shape() -> None:
     }
 
 
-def test_pagination_dependency_and_response_model() -> None:
-    client = TestClient(build_test_app())
-
-    response = client.get("/test/page?page=2&page_size=10")
+def test_pagination_dependency_and_response_model(exception_client: TestClient) -> None:
+    response = exception_client.get("/test/page?page=2&page_size=10")
 
     assert response.status_code == 200
     assert response.json() == {
@@ -198,10 +220,10 @@ def test_pagination_dependency_and_response_model() -> None:
     }
 
 
-def test_pagination_dependency_rejects_invalid_page() -> None:
-    client = TestClient(build_test_app())
-
-    response = client.get("/test/page?page=0")
+def test_pagination_dependency_rejects_invalid_page(
+    exception_client: TestClient,
+) -> None:
+    response = exception_client.get("/test/page?page=0")
 
     assert response.status_code == 400
     assert response.json()["code"] == "VALIDATION_ERROR"
