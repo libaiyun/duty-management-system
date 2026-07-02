@@ -1,31 +1,265 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { HttpClient } from '@/services/http'
+import { ApiError, HttpClient, NetworkError } from '@/services/http'
+
+type Fetcher = (...args: Parameters<typeof fetch>) => Promise<Response>
+
+function makeFetchResponse(
+  json: object,
+  status = 200,
+  ok = true,
+): Response {
+  return {
+    ok,
+    status,
+    json: vi.fn().mockResolvedValue(json),
+  } as unknown as Response
+}
 
 describe('HttpClient', () => {
-  it('builds API URLs from a base URL and parses JSON responses', async () => {
-    const fetcher = vi.fn().mockResolvedValue({
-      json: vi.fn().mockResolvedValue({
+  it('sends GET request and parses JSON response', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse({ code: 'OK', message: 'success', data: { status: 'ok' }, trace_id: 't1' }),
+    )
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    const res = await client.get<{ status: string }>('health')
+
+    expect(fetcher).toHaveBeenCalledWith('/api/v1/health', expect.objectContaining({ method: 'GET' }))
+    expect(res.data.status).toBe('ok')
+    expect(res.trace_id).toBe('t1')
+  })
+
+  it('sends POST request with JSON body', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse({ code: 'OK', message: 'success', data: { id: 1 }, trace_id: 't2' }),
+    )
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    const res = await client.post<{ id: number }>('/items', { name: 'test' })
+
+    expect(fetcher).toHaveBeenCalledWith('/api/v1/items', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({ name: 'test' }),
+    }))
+    expect(res.data.id).toBe(1)
+  })
+
+  it('sends PUT request with JSON body', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse({ code: 'OK', message: 'success', data: { updated: true }, trace_id: 't3' }),
+    )
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    const res = await client.put<{ updated: boolean }>('/items/1', { name: 'changed' })
+
+    expect(fetcher).toHaveBeenCalledWith('/api/v1/items/1', expect.objectContaining({
+      method: 'PUT',
+      body: JSON.stringify({ name: 'changed' }),
+    }))
+    expect(res.data.updated).toBe(true)
+  })
+
+  it('sends DELETE request', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse({ code: 'OK', message: 'success', data: null, trace_id: 't4' }),
+    )
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    const res = await client.delete<null>('/items/1')
+
+    expect(fetcher).toHaveBeenCalledWith('/api/v1/items/1', expect.objectContaining({ method: 'DELETE' }))
+    expect(res.code).toBe('OK')
+  })
+
+  it('injects Authorization header from getToken callback', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse({ code: 'OK', message: 'success', data: null, trace_id: 't5' }),
+    )
+    const client = new HttpClient({
+      baseUrl: '/api/v1',
+      fetcher: fetcher as Fetcher,
+      callbacks: { getToken: () => 'token-abc' },
+    })
+
+    await client.get('health')
+
+    const callHeaders = (fetcher.mock.calls[0] as Parameters<typeof fetch>)[1]?.headers as Record<string, string> | undefined
+    expect(callHeaders?.Authorization).toBe('Bearer token-abc')
+  })
+
+  it('does not inject Authorization header when getToken returns null', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse({ code: 'OK', message: 'success', data: null, trace_id: 't6' }),
+    )
+    const client = new HttpClient({
+      baseUrl: '/api/v1',
+      fetcher: fetcher as Fetcher,
+      callbacks: { getToken: () => null },
+    })
+
+    await client.get('health')
+
+    const callHeaders = (fetcher.mock.calls[0] as Parameters<typeof fetch>)[1]?.headers as Record<string, string> | undefined
+    expect(callHeaders?.Authorization).toBeUndefined()
+  })
+
+  it('sends getPage request with query params', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse({
         code: 'OK',
         message: 'success',
-        data: { status: 'ok' },
-        trace_id: 'trace-test',
+        data: { items: [], total: 0, page: 1, page_size: 20, total_pages: 0 },
+        trace_id: 't7',
       }),
-    })
+    )
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    const res = await client.getPage('/items', { page: 2, page_size: 50 })
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/items?page=2&page_size=50',
+      expect.any(Object),
+    )
+    expect(res.data.total).toBe(0)
+  })
+})
+
+describe('HttpClient error handling', () => {
+  it('throws NetworkError on connection failure', async () => {
+    const fetcher = vi.fn().mockRejectedValue(new Error('Connection refused'))
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    await expect(client.get('health')).rejects.toThrow(NetworkError)
+    await expect(client.get('health')).rejects.toThrow('Connection refused')
+  })
+
+  it('throws ApiError on non-OK HTTP status', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse(
+        { code: 'NOT_FOUND', message: '资源不存在', trace_id: 't8' },
+        404,
+        false,
+      ),
+    )
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    try {
+      await client.get('missing')
+      expect.fail('Expected ApiError')
+    } catch (err) {
+      const apiErr = err as ApiError
+      expect(apiErr).toBeInstanceOf(ApiError)
+      expect(apiErr.status).toBe(404)
+      expect(apiErr.code).toBe('NOT_FOUND')
+      expect(apiErr.message).toBe('资源不存在')
+      expect(apiErr.traceId).toBe('t8')
+    }
+  })
+
+  it('throws ApiError on business error (code !== OK)', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse(
+        { code: 'SCHEDULE_LOCKED', message: '当前月份已锁定', trace_id: 't9' },
+        200,
+        true,
+      ),
+    )
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    try {
+      await client.get('schedule')
+      expect.fail('Expected ApiError')
+    } catch (err) {
+      const apiErr = err as ApiError
+      expect(apiErr.status).toBe(200)
+      expect(apiErr.code).toBe('SCHEDULE_LOCKED')
+      expect(apiErr.name).toBe('ApiError')
+    }
+  })
+
+  it('includes validation error details', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse(
+        {
+          code: 'VALIDATION_ERROR',
+          message: '参数校验失败',
+          trace_id: 't10',
+          details: [{ field: 'query.page', message: 'Input should be greater than or equal to 1' }],
+        },
+        400,
+        false,
+      ),
+    )
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    try {
+      await client.get('items?page=0')
+      expect.fail('Expected ApiError')
+    } catch (err) {
+      const apiErr = err as ApiError
+      expect(apiErr.details).toBeDefined()
+      expect(apiErr.details![0].field).toBe('query.page')
+    }
+  })
+
+  it('calls onUnauthorized callback on 401 response', async () => {
+    const onUnauthorized = vi.fn()
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse(
+        { code: 'UNAUTHORIZED', message: '未登录', trace_id: 't11' },
+        401,
+        false,
+      ),
+    )
     const client = new HttpClient({
-      baseUrl: '/api/v1/',
-      fetcher: fetcher as unknown as typeof fetch,
+      baseUrl: '/api/v1',
+      fetcher: fetcher as Fetcher,
+      callbacks: { onUnauthorized },
     })
 
-    const response = await client.get<{ status: string }>('health')
+    await expect(client.get('secure')).rejects.toThrow(ApiError)
+    expect(onUnauthorized).toHaveBeenCalledOnce()
+  })
 
-    expect(fetcher).toHaveBeenCalledWith('/api/v1/health', {
-      method: 'GET',
-      headers: {
-        Accept: 'application/json',
-      },
-    })
-    expect(response.data.status).toBe('ok')
-    expect(response.trace_id).toBe('trace-test')
+  it('handles 500 error response', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      makeFetchResponse({ code: 'INTERNAL_ERROR', message: '内部错误', trace_id: 't12' }, 500, false),
+    )
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    try {
+      await client.get('fail')
+      expect.fail('Expected ApiError')
+    } catch (err) {
+      const apiErr = err as ApiError
+      expect(apiErr.status).toBe(500)
+      expect(apiErr.code).toBe('INTERNAL_ERROR')
+    }
+  })
+
+  it('handles non-JSON error response body gracefully', async () => {
+    const fetcher = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 500,
+      json: vi.fn().mockRejectedValue(new Error('Invalid JSON')),
+    } as unknown as Response)
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    try {
+      await client.get('fail')
+      expect.fail('Expected ApiError')
+    } catch (err) {
+      const apiErr = err as ApiError
+      expect(apiErr.status).toBe(500)
+      expect(apiErr.code).toBe('UNKNOWN')
+    }
+  })
+
+  it('throws NetworkError with fallback message for non-Error exceptions', async () => {
+    const fetcher = vi.fn().mockRejectedValue('unexpected string error')
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
+
+    await expect(client.get('fail')).rejects.toThrow('网络连接失败，请检查网络')
   })
 })
