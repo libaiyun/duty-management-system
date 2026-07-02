@@ -37,11 +37,14 @@ def test_app_fixture_overrides_get_db(app, db_session: Session) -> None:
         response = client.get("/test-fixtures/db")
 
     assert response.status_code == 200
-    assert response.json() == {
+    body = response.json()
+    assert body == {
         "code": "OK",
         "message": "success",
         "data": ["from-override"],
+        "trace_id": body["trace_id"],
     }
+    assert body["trace_id"]
 
 
 def test_db_session_fixture_is_transactional(db_session: Session) -> None:

@@ -207,7 +207,8 @@ def test_pagination_dependency_and_response_model(exception_client: TestClient) 
     response = exception_client.get("/test/page?page=2&page_size=10")
 
     assert response.status_code == 200
-    assert response.json() == {
+    body = response.json()
+    assert body == {
         "code": "OK",
         "message": "success",
         "data": {
@@ -217,13 +218,35 @@ def test_pagination_dependency_and_response_model(exception_client: TestClient) 
             "page_size": 10,
             "total_pages": 3,
         },
+        "trace_id": body["trace_id"],
     }
+    assert body["trace_id"]
+
+
+def test_pagination_dependency_accepts_design_max_page_size(
+    exception_client: TestClient,
+) -> None:
+    response = exception_client.get("/test/page?page=1&page_size=200")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["data"]["page_size"] == 200
+    assert body["trace_id"]
 
 
 def test_pagination_dependency_rejects_invalid_page(
     exception_client: TestClient,
 ) -> None:
     response = exception_client.get("/test/page?page=0")
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "VALIDATION_ERROR"
+
+
+def test_pagination_dependency_rejects_too_large_page_size(
+    exception_client: TestClient,
+) -> None:
+    response = exception_client.get("/test/page?page_size=201")
 
     assert response.status_code == 400
     assert response.json()["code"] == "VALIDATION_ERROR"
