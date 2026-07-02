@@ -20,7 +20,11 @@ def test_health_endpoint_returns_ok() -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "status": "ok",
-        "service": SERVICE_NAME,
-        "version": APP_VERSION,
+        "code": "OK",
+        "message": "success",
+        "data": {
+            "status": "ok",
+            "service": SERVICE_NAME,
+            "version": APP_VERSION,
+        },
     }

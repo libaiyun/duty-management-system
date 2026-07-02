@@ -16,12 +16,17 @@ def test_create_app_returns_fastapi_instance() -> None:
 def test_backend_layer_packages_are_importable() -> None:
     packages = [
         "app.api",
+        "app.api.deps",
         "app.api.v1",
         "app.core",
+        "app.core.exception_handlers",
+        "app.core.exceptions",
         "app.core.metadata",
         "app.db",
         "app.db.base",
         "app.db.session",
+        "app.schemas.pagination",
+        "app.schemas.response",
         "app.models",
         "app.repositories",
         "app.schemas",
