@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>广播电视台站值班管理系统 HTML 原型</title>
+  <link rel="stylesheet" href="styles.css?v=20260702">
+</head>
+<body>
+  <div id="loginView" class="login-view">
+    <main class="login-panel" aria-label="登录">
+      <div class="brand-mark">值</div>
+      <h1>广播电视台站值班管理系统</h1>
+      <p>多台站、多机房排班与审批原型</p>
+      <label>账号<input id="loginAccount" value="director" autocomplete="username"></label>
+      <label>密码<input id="loginPassword" type="password" value="123456" autocomplete="current-password"></label>
+      <div class="login-row"><label class="inline"><input type="checkbox" checked> 记住登录</label><a href="#">微信绑定登录</a></div>
+      <button id="loginBtn" class="btn primary wide">登录系统</button>
+      <div id="loginError" class="form-error" hidden>账号或密码错误，请重试。</div>
+    </main>
+  </div>
+
+  <div id="appView" class="app-shell" hidden>
+    <aside class="sidebar">
+      <div class="system-title">
+        <span class="logo">值</span>
+        <div><strong>值班管理</strong><small>Duty Console</small></div>
+      </div>
+      <nav id="menu" class="menu" aria-label="主菜单"></nav>
+    </aside>
+
+    <section class="main-shell">
+      <header class="topbar">
+        <div class="scope-selectors">
+          <select aria-label="台站"><option>广发台</option><option>卫星地球站</option><option>调频发射站</option></select>
+          <select aria-label="机房"><option>主城区机房</option><option>北山机房</option><option>应急机房</option></select>
+          <select id="roleSelect" aria-label="角色切换">
+            <option>机房主任</option>
+            <option>值机员</option>
+            <option>排班管理员</option>
+            <option>财务/统计</option>
+            <option>系统管理员</option>
+          </select>
+        </div>
+        <div class="top-actions">
+          <button class="icon-btn" data-action="toast" title="消息提醒">🔔<span class="dot"></span></button>
+          <button class="icon-btn" data-action="openDrawer" title="个人信息">👤</button>
+          <button id="logoutBtn" class="btn subtle">退出</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <div class="breadcrumb" id="breadcrumb">工作台 / 首页</div>
+        <div id="pageHost"></div>
+      </main>
+    </section>
+  </div>
+
+  <div id="modal" class="modal-backdrop" hidden>
+    <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <header><h2 id="modalTitle">操作</h2><button class="icon-btn" data-close-modal title="关闭">×</button></header>
+      <div id="modalBody" class="modal-body"></div>
+      <footer><button class="btn subtle" data-close-modal>取消</button><button class="btn primary" data-confirm-modal>确认</button></footer>
+    </section>
+  </div>
+
+  <aside id="drawer" class="drawer" hidden>
+    <header><h2 id="drawerTitle">详情</h2><button class="icon-btn" data-close-drawer title="关闭">×</button></header>
+    <div id="drawerBody" class="drawer-body"></div>
+  </aside>
+
+  <div id="toast" class="toast" hidden>操作已完成</div>
+  <script src="app.js?v=20260702"></script>
+</body>
+</html>
+
