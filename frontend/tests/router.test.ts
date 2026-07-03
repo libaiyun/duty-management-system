@@ -49,9 +49,16 @@ describe('router', () => {
 
   it('non-home leaf routes have permission code assigned', () => {
     const routes = router.getRoutes()
-    const leafRoutes = routes.filter((r) => r.name && !r.children && r.name !== 'home' && r.name !== 'forbidden')
+    const leafRoutes = routes.filter((r) => r.name && !r.children && r.name !== 'home' && r.name !== 'forbidden' && r.name !== 'not-found')
     for (const route of leafRoutes) {
       expect(route.meta.permission).toBeDefined()
     }
+  })
+
+  it('has a catch-all route for unknown paths', () => {
+    const notFound = router.getRoutes().find((r) => r.name === 'not-found')
+    expect(notFound).toBeDefined()
+    expect(notFound?.path).toBe('/:pathMatch(.*)*')
+    expect(notFound?.meta.permission).toBeUndefined()
   })
 })

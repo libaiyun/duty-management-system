@@ -7,6 +7,7 @@ import type { PermissionCode } from '@/types/permission'
 import { usePermissionStore } from '@/stores/permission'
 import ForbiddenView from '@/views/ForbiddenView.vue'
 import HomeView from '@/views/HomeView.vue'
+import NotFoundView from '@/views/NotFoundView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 
 function buildRoutes(items: MenuItem[]): RouteRecordRaw[] {
@@ -42,6 +43,12 @@ export const router = createRouter({
       name: 'forbidden',
       component: ForbiddenView,
       meta: { title: '无权访问' },
+    },
+    {
+      path: '/:pathMatch(.*)*',
+      name: 'not-found',
+      component: NotFoundView,
+      meta: { title: '页面不存在' },
     },
   ],
 })
