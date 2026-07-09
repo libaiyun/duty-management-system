@@ -20,10 +20,10 @@ HTTP_ERROR_CODES = {
 
 
 def register_exception_handlers(app: FastAPI) -> None:
-    app.add_exception_handler(AppException, handle_app_exception)
-    app.add_exception_handler(HTTPException, handle_http_exception)
-    app.add_exception_handler(RequestValidationError, handle_request_validation_error)
-    app.add_exception_handler(Exception, handle_unexpected_exception)
+    app.add_exception_handler(AppException, handle_app_exception)  # type: ignore[arg-type]
+    app.add_exception_handler(HTTPException, handle_http_exception)  # type: ignore[arg-type]
+    app.add_exception_handler(RequestValidationError, handle_request_validation_error)  # type: ignore[arg-type]
+    app.add_exception_handler(Exception, handle_unexpected_exception)  # type: ignore[arg-type]
 
 
 async def handle_app_exception(
@@ -48,7 +48,7 @@ async def handle_http_exception(
         code=_http_error_code(exc.status_code),
         message=_detail_to_message(exc.detail),
         request=request,
-        headers=exc.headers,
+        headers=dict(exc.headers) if exc.headers else None,
     )
 
 
@@ -101,7 +101,7 @@ def _error_response(
     )
     return JSONResponse(
         status_code=int(status_code),
-        content=response.model_dump(exclude_none=True),
+        content=response.model_dump(exclude_none=True),  # type: ignore[attr-defined]
         headers=headers,
     )
 
@@ -122,6 +122,6 @@ def _http_error_code(status_code: int) -> str:
 
 def _get_trace_id(request: Request) -> str:
     trace_id = request.headers.get("X-Trace-Id")
-    if trace_id:
-        return trace_id
+    if trace_id is not None:
+        return str(trace_id)
     return str(uuid4())

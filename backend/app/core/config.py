@@ -85,7 +85,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
 def _read_app_environment(source: Mapping[str, str]) -> AppEnvironment:
     raw_value = source.get("DUTY_APP_ENV", AppEnvironment.DEV.value).strip().lower()
     try:
-        return AppEnvironment(raw_value)
+        return AppEnvironment(raw_value)  # type: ignore[arg-type]
     except ValueError as exc:
         allowed = ", ".join(item.value for item in AppEnvironment)
         raise ConfigError(f"DUTY_APP_ENV must be one of: {allowed}") from exc
@@ -93,9 +93,7 @@ def _read_app_environment(source: Mapping[str, str]) -> AppEnvironment:
 
 def _ensure_production_keys(source: Mapping[str, str]) -> None:
     missing_keys = [
-        key
-        for key in PRODUCTION_REQUIRED_KEYS
-        if not source.get(key) or source[key].strip() == DEFAULT_VALUES.get(key)
+        key for key in PRODUCTION_REQUIRED_KEYS if not source.get(key) or source[key].strip() == DEFAULT_VALUES.get(key)
     ]
     if missing_keys:
         joined_keys = ", ".join(missing_keys)

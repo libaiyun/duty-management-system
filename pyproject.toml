@@ -20,6 +20,11 @@ test = [
     "httpx>=0.27.0,<1.0.0",
     "pytest>=8.0.0,<9.0.0",
 ]
+dev = [
+    "black>=20.8,<25.0",
+    "flake8>=5.0,<7.0",
+    "mypy>=0.910,<2.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["backend"]
@@ -27,3 +32,7 @@ where = ["backend"]
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]
 pythonpath = ["backend"]
+
+[tool.black]
+line-length = 120
+target-version = ["py38"]
