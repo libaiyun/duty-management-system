@@ -1,0 +1,16 @@
+services:
+  backend:
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/backend/app:ro
+      - ./backend/tests:/app/backend/tests:ro
+      - ./backend/alembic:/app/backend/alembic:ro
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    develop:
+      watch:
+        - action: sync
+          path: ./backend/app
+          target: /app/backend/app
+        - action: rebuild
+          path: ./pyproject.toml
