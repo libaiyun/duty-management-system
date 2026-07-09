@@ -1,4 +1,12 @@
 services:
+  nginx:
+    image: nginx:stable
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - duty_net
+
   backend:
     build: .
     env_file: ./deploy/env/dev.env

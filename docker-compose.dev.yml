@@ -1,4 +1,11 @@
 services:
+  nginx:
+    ports:
+      - "80:80"
+    volumes:
+      - ./frontend/dist:/usr/share/nginx/html:ro
+      - ./deploy/nginx/conf.d:/etc/nginx/conf.d:ro
+
   backend:
     ports:
       - "8000:8000"
