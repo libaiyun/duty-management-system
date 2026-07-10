@@ -15,6 +15,7 @@ import PlaceholderView from '@/views/PlaceholderView.vue'
 const CUSTOM_VIEWS: Record<string, unknown> = {
   home: HomeView,
   'account-role': () => import('@/views/system/AccountRoleView.vue'),
+  'org-unit': () => import('@/views/base-data/OrgUnitView.vue'),
 }
 
 function buildRoutes(items: MenuItem[]): RouteRecordRaw[] {
