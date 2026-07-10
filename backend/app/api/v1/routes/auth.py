@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
@@ -29,7 +29,7 @@ def login(
     settings: Settings = Depends(_get_settings),
 ) -> ApiResponse[TokenResponse]:
     user = authenticate_user(db, body.username, body.password)
-    user.last_login_at = datetime.now(timezone.utc)
+    user.last_login_at = datetime.now(UTC)
     db.commit()
     access, refresh = issue_tokens(settings, user)
     return ok(TokenResponse(access_token=access, refresh_token=refresh))

@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import Optional
 
 from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, String, Table, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -25,13 +24,13 @@ sys_role_permission = Table(
 class SysUser(BaseModel):
     __tablename__ = "sys_user"
 
-    person_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    person_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     username: Mapped[str] = mapped_column(String(64), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(64), nullable=False)
-    wx_openid: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    wx_openid: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="enabled")
-    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     roles: Mapped[list["SysRole"]] = relationship(secondary=sys_user_role, back_populates="users")
 
@@ -48,7 +47,7 @@ class SysRole(BaseModel):
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="enabled")
-    remark: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    remark: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     users: Mapped[list["SysUser"]] = relationship(secondary=sys_user_role, back_populates="roles")
     permissions: Mapped[list["SysPermission"]] = relationship(
@@ -66,9 +65,9 @@ class SysPermission(BaseModel):
     code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
-    parent_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
-    path: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    action: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    parent_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    action: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="enabled")
 
     roles: Mapped[list["SysRole"]] = relationship(
@@ -83,11 +82,11 @@ class SysPermission(BaseModel):
 class SysDataScope(BaseModel):
     __tablename__ = "sys_data_scope"
 
-    role_id: Mapped[Optional[int]] = mapped_column(
+    role_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("sys_role.id", ondelete="CASCADE"), nullable=True,
     )
-    user_id: Mapped[Optional[int]] = mapped_column(
+    user_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("sys_user.id", ondelete="CASCADE"), nullable=True,
     )
     scope_type: Mapped[str] = mapped_column(String(32), nullable=False)
-    org_unit_id: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
+    org_unit_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)

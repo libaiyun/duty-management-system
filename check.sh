@@ -26,7 +26,7 @@ run_step() {
 echo ">>> Starting backend services..."
 docker compose up -d db redis backend --wait
 
-run_step "Backend lint (flake8)"        docker compose run --rm --no-deps backend flake8 backend/app
+run_step "Backend lint (ruff)"          docker compose run --rm --no-deps backend ruff check backend/app
 run_step "Backend type-check (mypy)"    docker compose run --rm --no-deps backend mypy
 run_step "Backend test (pytest)"        docker compose run --rm --no-deps backend pytest
 

@@ -4,10 +4,10 @@ check:
 	@bash check.sh
 
 lint:
-	flake8 backend/app
+	ruff check backend/app
 
 format:
-	black backend/app backend/tests
+	ruff format backend/app backend/tests
 
 type-check:
 	mypy

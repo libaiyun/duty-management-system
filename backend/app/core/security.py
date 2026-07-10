@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from bcrypt import checkpw, gensalt, hashpw
 from fastapi import Request
@@ -19,7 +19,7 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 
 def _create_token(settings: Settings, user_id: int, username: str, token_type: str, expire_minutes: int) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(minutes=expire_minutes)
+    expire = datetime.now(UTC) + timedelta(minutes=expire_minutes)
     payload = {
         "sub": str(user_id),
         "username": username,
