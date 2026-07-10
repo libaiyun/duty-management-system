@@ -12,7 +12,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
-from app.models.user import SysDataScope, SysPermission, SysUser, sys_role_permission, sys_user_role
+from app.models.user import SysDataScope, SysPermission, SysRole, SysUser, sys_role_permission, sys_user_role
 
 
 def authenticate_user(db: Session, username: str, password: str) -> SysUser:
@@ -117,3 +117,88 @@ def resolve_user_data_scopes(db: Session, user: SysUser) -> list[DataScope]:
 
 def has_global_scope(scopes: list[DataScope]) -> bool:
     return any(s.scope_type == "all" for s in scopes)
+
+
+def list_users(db: Session) -> list[SysUser]:
+    return list(db.scalars(select(SysUser).order_by(SysUser.id)).all())
+
+
+def get_user_detail(db: Session, user_id: int) -> SysUser | None:
+    return db.get(SysUser, user_id)
+
+
+def update_user(db: Session, user_id: int, display_name: str | None, status: str | None) -> SysUser:
+    user = db.get(SysUser, user_id)
+    if user is None:
+        raise NotFoundError(message="用户不存在")
+    if display_name is not None:
+        user.display_name = display_name
+    if status is not None:
+        user.status = status
+    db.flush()
+    return user
+
+
+def assign_user_roles(db: Session, user_id: int, role_ids: list[int]) -> SysUser:
+    user = db.get(SysUser, user_id)
+    if user is None:
+        raise NotFoundError(message="用户不存在")
+    roles = db.scalars(select(SysRole).where(SysRole.id.in_(role_ids))).all() if role_ids else []
+    if len(roles) != len(role_ids):
+        raise NotFoundError(message="角色不存在")
+    user.roles = roles  # type: ignore[assignment]
+    db.flush()
+    return user
+
+
+def assign_user_data_scopes(db: Session, user_id: int, scopes: list[tuple[str, int | None]]) -> None:
+    user = db.get(SysUser, user_id)
+    if user is None:
+        raise NotFoundError(message="用户不存在")
+    scopes_to_delete = db.scalars(select(SysDataScope).where(SysDataScope.user_id == user_id)).all()
+    for s in scopes_to_delete:
+        db.delete(s)
+    for scope_type, org_unit_id in scopes:
+        db.add(SysDataScope(user_id=user_id, scope_type=scope_type, org_unit_id=org_unit_id))
+    db.flush()
+
+
+def list_roles(db: Session) -> list[SysRole]:
+    return list(db.scalars(select(SysRole).order_by(SysRole.id)).all())
+
+
+def create_role(db: Session, code: str, name: str, remark: str | None) -> SysRole:
+    role = SysRole(code=code, name=name, remark=remark)
+    db.add(role)
+    db.flush()
+    return role
+
+
+def update_role(db: Session, role_id: int, name: str | None, remark: str | None, status: str | None) -> SysRole:
+    role = db.get(SysRole, role_id)
+    if role is None:
+        raise NotFoundError(message="角色不存在")
+    if name is not None:
+        role.name = name
+    if remark is not None:
+        role.remark = remark
+    if status is not None:
+        role.status = status
+    db.flush()
+    return role
+
+
+def assign_role_permissions(db: Session, role_id: int, permission_ids: list[int]) -> SysRole:
+    role = db.get(SysRole, role_id)
+    if role is None:
+        raise NotFoundError(message="角色不存在")
+    perms = db.scalars(select(SysPermission).where(SysPermission.id.in_(permission_ids))).all() if permission_ids else []
+    if len(perms) != len(permission_ids):
+        raise NotFoundError(message="权限不存在")
+    role.permissions = perms  # type: ignore[assignment]
+    db.flush()
+    return role
+
+
+def list_permissions(db: Session) -> list[SysPermission]:
+    return list(db.scalars(select(SysPermission).order_by(SysPermission.id)).all())

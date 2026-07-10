@@ -12,6 +12,11 @@ import LoginView from '@/views/LoginView.vue'
 import NotFoundView from '@/views/NotFoundView.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 
+const CUSTOM_VIEWS: Record<string, unknown> = {
+  home: HomeView,
+  'account-role': () => import('@/views/system/AccountRoleView.vue'),
+}
+
 function buildRoutes(items: MenuItem[]): RouteRecordRaw[] {
   return items.map((item): RouteRecordRaw => {
     if (item.children && item.children.length > 0) {
@@ -30,7 +35,7 @@ function buildRoutes(items: MenuItem[]): RouteRecordRaw[] {
     return {
       path: item.path,
       name: item.name,
-      component: item.name === 'home' ? HomeView : PlaceholderView,
+      component: CUSTOM_VIEWS[item.name] ?? PlaceholderView,
       meta,
     }
   })
