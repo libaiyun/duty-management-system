@@ -16,6 +16,7 @@ const CUSTOM_VIEWS: Record<string, unknown> = {
   home: HomeView,
   'account-role': () => import('@/views/system/AccountRoleView.vue'),
   'org-unit': () => import('@/views/base-data/OrgUnitView.vue'),
+  person: () => import('@/views/base-data/PersonView.vue'),
 }
 
 function buildRoutes(items: MenuItem[]): RouteRecordRaw[] {
