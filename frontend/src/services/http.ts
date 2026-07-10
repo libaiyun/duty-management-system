@@ -110,7 +110,8 @@ export class HttpClient {
 
     let response: Response
     try {
-      response = await this.fetcher(this.createUrl(path), init)
+      const doFetch = this.fetcher
+      response = await doFetch(this.createUrl(path), init)
     } catch (err) {
       throw new NetworkError(
         err instanceof Error ? err.message : '网络连接失败，请检查网络',
