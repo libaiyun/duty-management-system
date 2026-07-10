@@ -1,3 +1,5 @@
+from dataclasses import dataclass
+
 from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
@@ -10,7 +12,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
-from app.models.user import SysPermission, SysUser, sys_role_permission, sys_user_role
+from app.models.user import SysDataScope, SysPermission, SysUser, sys_role_permission, sys_user_role
 
 
 def authenticate_user(db: Session, username: str, password: str) -> SysUser:
@@ -84,3 +86,34 @@ def check_user_permission(db: Session, user: SysUser, permission_code: str) -> b
         )
     )
     return db.scalar(select(stmt)) or False
+
+
+@dataclass(frozen=True)
+class DataScope:
+    scope_type: str
+    org_unit_id: int | None = None
+
+
+def resolve_user_data_scopes(db: Session, user: SysUser) -> list[DataScope]:
+    role_ids = db.scalars(
+        select(sys_user_role.c.role_id).where(sys_user_role.c.user_id == user.id)
+    ).all()
+
+    stmt = select(SysDataScope).where(
+        (SysDataScope.user_id == user.id)
+        | (SysDataScope.role_id.in_(role_ids) if role_ids else False)
+    )
+
+    seen: set[tuple[str, int | None]] = set()
+    result: list[DataScope] = []
+    for scope in db.scalars(stmt):
+        key = (scope.scope_type, scope.org_unit_id)
+        if key not in seen:
+            seen.add(key)
+            result.append(DataScope(scope.scope_type, scope.org_unit_id))
+
+    return result
+
+
+def has_global_scope(scopes: list[DataScope]) -> bool:
+    return any(s.scope_type == "all" for s in scopes)

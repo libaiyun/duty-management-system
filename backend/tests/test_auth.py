@@ -2,8 +2,13 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.models.user import SysPermission, SysRole, SysUser
-from app.services.auth import create_user
+from app.models.user import SysDataScope, SysPermission, SysRole, SysUser
+from app.services.auth import (
+    DataScope,
+    create_user,
+    has_global_scope,
+    resolve_user_data_scopes,
+)
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -390,3 +395,117 @@ def test_reset_password_worker_cannot_elevate(api_client: TestClient, db_session
     )
 
     assert resp.status_code == 403
+
+
+# --- M2-P1-T5: data scope resolution ---
+
+
+def test_resolve_scopes_empty_for_no_scopes(db_session) -> None:
+    user = create_user(db_session, "user", "pass", "用户")
+    db_session.commit()
+
+    scopes = resolve_user_data_scopes(db_session, user)
+    assert scopes == []
+
+
+def test_resolve_direct_scope_self(db_session) -> None:
+    user = create_user(db_session, "user", "pass", "用户")
+    db_session.add(SysDataScope(user_id=user.id, scope_type="self"))
+    db_session.commit()
+
+    scopes = resolve_user_data_scopes(db_session, user)
+    assert len(scopes) == 1
+    assert scopes[0].scope_type == "self"
+    assert scopes[0].org_unit_id is None
+
+
+def test_resolve_direct_scope_room(db_session) -> None:
+    user = create_user(db_session, "user", "pass", "用户")
+    db_session.add(SysDataScope(user_id=user.id, scope_type="room", org_unit_id=5))
+    db_session.commit()
+
+    scopes = resolve_user_data_scopes(db_session, user)
+    assert len(scopes) == 1
+    assert scopes[0].scope_type == "room"
+    assert scopes[0].org_unit_id == 5
+
+
+def test_resolve_direct_scope_station(db_session) -> None:
+    user = create_user(db_session, "user", "pass", "用户")
+    db_session.add(SysDataScope(user_id=user.id, scope_type="station", org_unit_id=10))
+    db_session.commit()
+
+    scopes = resolve_user_data_scopes(db_session, user)
+    assert len(scopes) == 1
+    assert scopes[0].scope_type == "station"
+    assert scopes[0].org_unit_id == 10
+
+
+def test_resolve_direct_scope_all(db_session) -> None:
+    user = create_user(db_session, "user", "pass", "用户")
+    db_session.add(SysDataScope(user_id=user.id, scope_type="all"))
+    db_session.commit()
+
+    scopes = resolve_user_data_scopes(db_session, user)
+    assert len(scopes) == 1
+    assert scopes[0].scope_type == "all"
+    assert has_global_scope(scopes)
+
+
+def test_resolve_role_based_scope(db_session) -> None:
+    user = create_user(db_session, "user", "pass", "用户")
+    role = SysRole(code="room-role", name="机房角色")
+    db_session.add(role)
+    db_session.flush()
+    db_session.add(SysDataScope(role_id=role.id, scope_type="room", org_unit_id=7))
+    user.roles.append(role)
+    db_session.commit()
+
+    scopes = resolve_user_data_scopes(db_session, user)
+    assert len(scopes) == 1
+    assert scopes[0].scope_type == "room"
+    assert scopes[0].org_unit_id == 7
+
+
+def test_resolve_mixed_direct_and_role_scopes(db_session) -> None:
+    user = create_user(db_session, "user", "pass", "用户")
+    role = SysRole(code="station-role", name="台站角色")
+    db_session.add(role)
+    db_session.flush()
+    db_session.add(SysDataScope(role_id=role.id, scope_type="station", org_unit_id=3))
+    db_session.add(SysDataScope(user_id=user.id, scope_type="self"))
+    user.roles.append(role)
+    db_session.commit()
+
+    scopes = resolve_user_data_scopes(db_session, user)
+    scope_types = {s.scope_type for s in scopes}
+    assert scope_types == {"self", "station"}
+
+
+def test_resolve_multiple_direct_scopes(db_session) -> None:
+    user = create_user(db_session, "user", "pass", "用户")
+    db_session.add(SysDataScope(user_id=user.id, scope_type="self"))
+    db_session.add(SysDataScope(user_id=user.id, scope_type="room", org_unit_id=5))
+    db_session.commit()
+
+    scopes = resolve_user_data_scopes(db_session, user)
+    assert len(scopes) == 2
+
+
+def test_resolve_deduplicates_identical_scopes(db_session) -> None:
+    user = create_user(db_session, "user", "pass", "用户")
+    db_session.add(SysDataScope(user_id=user.id, scope_type="room", org_unit_id=5))
+    db_session.add(SysDataScope(user_id=user.id, scope_type="room", org_unit_id=5))
+    db_session.commit()
+
+    scopes = resolve_user_data_scopes(db_session, user)
+    assert len(scopes) == 1
+
+
+def test_has_global_scope_false(db_session) -> None:
+    user = create_user(db_session, "user", "pass", "用户")
+    db_session.add(SysDataScope(user_id=user.id, scope_type="self"))
+    db_session.commit()
+
+    scopes = resolve_user_data_scopes(db_session, user)
+    assert not has_global_scope(scopes)
