@@ -13,6 +13,7 @@ from app.core.security import (
     verify_password,
 )
 from app.models.organization import OrgUnit
+from app.models.person import Person
 from app.models.user import SysDataScope, SysPermission, SysRole, SysUser, sys_role_permission, sys_user_role
 
 
@@ -248,3 +249,59 @@ def check_org_unit_referenced(db: Session, unit_id: int) -> bool:
     return db.scalar(
         exists().where(OrgUnit.parent_id == unit_id).select()
     ) or False
+
+
+def list_persons(db: Session) -> list[Person]:
+    return list(db.scalars(select(Person).order_by(Person.id)).all())
+
+
+def create_person(
+    db: Session, code: str, name: str, person_type: str,
+    org_unit_id: int | None = None, phone: str | None = None,
+    participate_schedule: bool = False, rotation_order: int | None = None,
+    remark: str | None = None,
+) -> Person:
+    if org_unit_id is not None and db.get(OrgUnit, org_unit_id) is None:
+        raise NotFoundError(message="组织不存在")
+    p = Person(
+        code=code, name=name, person_type=person_type,
+        org_unit_id=org_unit_id, phone=phone,
+        participate_schedule=participate_schedule,
+        rotation_order=rotation_order, remark=remark,
+    )
+    db.add(p)
+    db.flush()
+    return p
+
+
+def update_person(
+    db: Session, person_id: int,
+    org_unit_id: int | None = None,
+    name: str | None = None,
+    phone: str | None = None,
+    participate_schedule: bool | None = None,
+    rotation_order: int | None = None,
+    status: str | None = None,
+    remark: str | None = None,
+) -> Person:
+    p = db.get(Person, person_id)
+    if p is None:
+        raise NotFoundError(message="人员不存在")
+    if org_unit_id is not None:
+        if db.get(OrgUnit, org_unit_id) is None:
+            raise NotFoundError(message="组织不存在")
+        p.org_unit_id = org_unit_id
+    if name is not None:
+        p.name = name
+    if phone is not None:
+        p.phone = phone
+    if participate_schedule is not None:
+        p.participate_schedule = participate_schedule
+    if rotation_order is not None:
+        p.rotation_order = rotation_order
+    if status is not None:
+        p.status = status
+    if remark is not None:
+        p.remark = remark
+    db.flush()
+    return p

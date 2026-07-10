@@ -24,7 +24,9 @@ sys_role_permission = Table(
 class SysUser(BaseModel):
     __tablename__ = "sys_user"
 
-    person_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    person_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("person.id", ondelete="SET NULL"), nullable=True,
+    )
     username: Mapped[str] = mapped_column(String(64), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     display_name: Mapped[str] = mapped_column(String(64), nullable=False)
