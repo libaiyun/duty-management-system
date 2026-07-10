@@ -24,11 +24,11 @@ run_step() {
 
 # ── Backend (via Docker Compose) ──
 echo ">>> Starting backend services..."
-docker compose up -d db redis backend --wait
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db redis backend --wait
 
-run_step "Backend lint (ruff)"          docker compose run --rm --no-deps backend ruff check backend/app
-run_step "Backend type-check (mypy)"    docker compose run --rm --no-deps backend mypy
-run_step "Backend test (pytest)"        docker compose run --rm --no-deps backend pytest
+run_step "Backend lint (ruff)"          docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm --no-deps backend ruff check backend/app
+run_step "Backend type-check (mypy)"    docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm --no-deps backend mypy
+run_step "Backend test (pytest)"        docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm --no-deps backend pytest
 
 echo ">>> Stopping backend services..."
 docker compose down -v

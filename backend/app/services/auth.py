@@ -4,7 +4,7 @@ from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import BusinessRuleError, NotFoundError, UnauthorizedError
+from app.core.exceptions import BusinessRuleError, NotFoundError, StateConflictError, UnauthorizedError
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -14,6 +14,7 @@ from app.core.security import (
 )
 from app.models.organization import OrgUnit
 from app.models.person import Person
+from app.models.shift import ShiftDef
 from app.models.user import SysDataScope, SysPermission, SysRole, SysUser, sys_role_permission, sys_user_role
 
 
@@ -305,3 +306,86 @@ def update_person(
         p.remark = remark
     db.flush()
     return p
+
+
+def _parse_time(t: str) -> tuple[int, int]:
+    parts = t.split(":")
+    return int(parts[0]), int(parts[1])
+
+
+def _times_overlap(
+    start_a: str, end_a: str,
+    start_b: str, end_b: str,
+) -> bool:
+    """Check if two HH:MM time ranges overlap (no wrap-around)."""
+    sa_h, sa_m = _parse_time(start_a)
+    ea_h, ea_m = _parse_time(end_a)
+    sb_h, sb_m = _parse_time(start_b)
+    eb_h, eb_m = _parse_time(end_b)
+    a_start_min = sa_h * 60 + sa_m
+    a_end_min = ea_h * 60 + ea_m
+    b_start_min = sb_h * 60 + sb_m
+    b_end_min = eb_h * 60 + eb_m
+    return a_start_min < b_end_min and b_start_min < a_end_min
+
+
+def list_shift_defs(db: Session) -> list[ShiftDef]:
+    return list(db.scalars(select(ShiftDef).order_by(ShiftDef.display_order, ShiftDef.id)).all())
+
+
+def create_shift_def(
+    db: Session, code: str, name: str,
+    start_time: str, end_time: str,
+    display_order: int = 0,
+) -> ShiftDef:
+    existing = db.scalars(select(ShiftDef).where(ShiftDef.code == code)).first()
+    if existing:
+        raise StateConflictError(message=f"班次编码 '{code}' 已存在")
+    overlaps = db.scalars(select(ShiftDef).where(ShiftDef.status == "enabled")).all()
+    for s in overlaps:
+        if _times_overlap(start_time, end_time, s.start_time, s.end_time):
+            raise BusinessRuleError(message=f"班次时间与 '{s.name}' ({s.start_time}-{s.end_time}) 重叠")
+    sd = ShiftDef(
+        code=code, name=name,
+        start_time=start_time, end_time=end_time,
+        display_order=display_order,
+    )
+    db.add(sd)
+    db.flush()
+    return sd
+
+
+def update_shift_def(
+    db: Session, shift_id: int,
+    name: str | None = None,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    display_order: int | None = None,
+    status: str | None = None,
+) -> ShiftDef:
+    sd = db.get(ShiftDef, shift_id)
+    if sd is None:
+        raise NotFoundError(message="班次不存在")
+    resolved_start = start_time if start_time is not None else sd.start_time
+    resolved_end = end_time if end_time is not None else sd.end_time
+    overlap = db.scalars(
+        select(ShiftDef).where(
+            ShiftDef.status == "enabled",
+            ShiftDef.id != shift_id,
+        )
+    ).all()
+    for s in overlap:
+        if _times_overlap(resolved_start, resolved_end, s.start_time, s.end_time):
+            raise BusinessRuleError(message=f"班次时间与 '{s.name}' ({s.start_time}-{s.end_time}) 重叠")
+    if name is not None:
+        sd.name = name
+    if start_time is not None:
+        sd.start_time = start_time
+    if end_time is not None:
+        sd.end_time = end_time
+    if display_order is not None:
+        sd.display_order = display_order
+    if status is not None:
+        sd.status = status
+    db.flush()
+    return sd
