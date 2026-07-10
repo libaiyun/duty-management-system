@@ -1,11 +1,13 @@
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import RequirePermission, _get_settings, get_db
 from app.core.config import Settings
 from app.core.security import get_current_user
+from app.models.user import SysPermission, sys_role_permission, sys_user_role
 from app.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
@@ -60,11 +62,18 @@ def me(
     settings: Settings = Depends(_get_settings),
 ) -> ApiResponse[UserMeResponse]:
     user = get_current_user(settings, request, db)
+    perm_codes = db.scalars(
+        select(SysPermission.code)
+        .join(sys_role_permission, SysPermission.id == sys_role_permission.c.permission_id)
+        .join(sys_user_role, sys_role_permission.c.role_id == sys_user_role.c.role_id)
+        .where(sys_user_role.c.user_id == user.id)
+    ).all()
     return ok(UserMeResponse(
         id=user.id,
         username=user.username,
         display_name=user.display_name,
         status=user.status,
+        permissions=list(perm_codes),
     ))
 
 

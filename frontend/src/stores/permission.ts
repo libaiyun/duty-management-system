@@ -1,11 +1,10 @@
 import { defineStore } from 'pinia'
 
-import { ALL_PERMISSIONS } from '@/types/permission'
 import type { PermissionCode } from '@/types/permission'
 
 export const usePermissionStore = defineStore('permission', {
   state: () => ({
-    permissions: new Set<PermissionCode>(ALL_PERMISSIONS),
+    permissions: new Set<PermissionCode>(),
   }),
 
   getters: {

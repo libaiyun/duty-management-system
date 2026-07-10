@@ -35,7 +35,7 @@ describe('useAuthStore', () => {
     vi.spyOn(httpClient, 'get').mockResolvedValueOnce({
       code: 'OK',
       message: 'success',
-      data: { id: 1, username: 'admin', display_name: '管理员', status: 'enabled' },
+      data: { id: 1, username: 'admin', display_name: '管理员', status: 'enabled', permissions: ['system:user:manage'] },
       trace_id: '',
     })
 
@@ -48,6 +48,8 @@ describe('useAuthStore', () => {
     expect(localStorage.getItem(TOKEN_KEY)).toBe('at')
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('rt')
     expect(localStorage.getItem(USER_KEY)).toBe('管理员')
+    const permStore = usePermissionStore()
+    expect(permStore.permissions.has('system:user:manage')).toBe(true)
   })
 
   it('logout clears state', async () => {

@@ -14,4 +14,5 @@ export interface UserMeResponse {
   username: string
   display_name: string
   status: string
+  permissions: string[]
 }

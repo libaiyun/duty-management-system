@@ -117,6 +117,7 @@ def test_me_returns_user_info(api_client: TestClient, db_session) -> None:
     assert data["data"]["username"] == "admin"
     assert data["data"]["display_name"] == "管理员"
     assert data["data"]["status"] == "enabled"
+    assert "permissions" in data["data"]
 
 
 def test_me_with_invalid_token(api_client: TestClient) -> None:

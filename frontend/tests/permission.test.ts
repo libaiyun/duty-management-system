@@ -9,10 +9,10 @@ describe('usePermissionStore', () => {
     setActivePinia(createPinia())
   })
 
-  it('starts with all permissions by default', () => {
+  it('starts with empty permissions by default', () => {
     const store = usePermissionStore()
-    expect(store.hasPermission(PERMISSION_CODES.SYSTEM_USER_MANAGE)).toBe(true)
-    expect(store.hasPermission(PERMISSION_CODES.DUTY_SCHEDULE_VIEW_SELF)).toBe(true)
+    expect(store.hasPermission(PERMISSION_CODES.SYSTEM_USER_MANAGE)).toBe(false)
+    expect(store.hasPermission(PERMISSION_CODES.DUTY_SCHEDULE_VIEW_SELF)).toBe(false)
   })
 
   it('can set specific permissions', () => {

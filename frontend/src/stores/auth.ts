@@ -4,6 +4,7 @@ import { httpClient } from '@/services/http'
 import type { LoginRequest, TokenResponse, UserMeResponse } from '@/types/auth'
 import { useAppStore } from '@/stores/app'
 import { usePermissionStore } from '@/stores/permission'
+import type { PermissionCode } from '@/types/permission'
 
 const TOKEN_KEY = 'duty_access_token'
 const REFRESH_TOKEN_KEY = 'duty_refresh_token'
@@ -42,6 +43,9 @@ export const useAuthStore = defineStore('auth', {
 
       const appStore = useAppStore()
       appStore.userName = user.display_name
+
+      const permStore = usePermissionStore()
+      permStore.setPermissions(user.permissions as PermissionCode[])
     },
 
     async logout(): Promise<void> {

@@ -21,6 +21,7 @@ class UserMeResponse(BaseModel):
     username: str
     display_name: str
     status: str
+    permissions: list[str] = Field(default_factory=list)
 
 
 class ChangePasswordRequest(BaseModel):
