@@ -7,13 +7,21 @@ from app.api.deps import get_db
 from app.core.config import Settings
 from app.core.security import get_current_user
 from app.schemas.auth import (
+    ChangePasswordRequest,
     LoginRequest,
     RefreshRequest,
+    ResetPasswordRequest,
     TokenResponse,
     UserMeResponse,
 )
 from app.schemas.response import ApiResponse, ok
-from app.services.auth import authenticate_user, issue_tokens, refresh_access_token
+from app.services.auth import (
+    authenticate_user,
+    change_own_password,
+    issue_tokens,
+    refresh_access_token,
+    reset_user_password,
+)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -62,3 +70,29 @@ def me(
         display_name=user.display_name,
         status=user.status,
     ))
+
+
+@router.put("/password", response_model=ApiResponse[None])
+def change_password(
+    body: ChangePasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(_get_settings),
+) -> ApiResponse[None]:
+    user = get_current_user(settings, request, db)
+    change_own_password(db, user, body.old_password, body.new_password)
+    db.commit()
+    return ok(message="密码修改成功")
+
+
+@router.post("/password/reset", response_model=ApiResponse[None])
+def reset_password(
+    body: ResetPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(_get_settings),
+) -> ApiResponse[None]:
+    get_current_user(settings, request, db)
+    reset_user_password(db, body.user_id, body.new_password)
+    db.commit()
+    return ok(message="密码重置成功")

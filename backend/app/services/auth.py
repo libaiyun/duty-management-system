@@ -2,7 +2,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.core.exceptions import UnauthorizedError
+from app.core.exceptions import BusinessRuleError, NotFoundError, UnauthorizedError
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -54,3 +54,20 @@ def refresh_access_token(settings: Settings, token: str) -> tuple[str, str]:
         create_access_token(settings, int(user_id_str), payload.get("username", "")),
         create_refresh_token(settings, int(user_id_str), payload.get("username", "")),
     )
+
+
+def change_own_password(db: Session, user: SysUser, old_password: str, new_password: str) -> None:
+    if not verify_password(old_password, user.password_hash):
+        raise BusinessRuleError(message="原密码错误")
+    if old_password == new_password:
+        raise BusinessRuleError(message="新密码不能与原密码相同")
+    user.password_hash = hash_password(new_password)
+    db.flush()
+
+
+def reset_user_password(db: Session, user_id: int, new_password: str) -> None:
+    user = db.get(SysUser, user_id)
+    if user is None:
+        raise NotFoundError(message="用户不存在或已注销")
+    user.password_hash = hash_password(new_password)
+    db.flush()

@@ -21,3 +21,13 @@ class UserMeResponse(BaseModel):
     username: str
     display_name: str
     status: str
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(..., min_length=1, max_length=128)
+    new_password: str = Field(..., min_length=1, max_length=128)
+
+
+class ResetPasswordRequest(BaseModel):
+    user_id: int = Field(..., gt=0)
+    new_password: str = Field(..., min_length=1, max_length=128)

@@ -119,3 +119,197 @@ def test_me_with_invalid_token(api_client: TestClient) -> None:
     )
 
     assert resp.status_code == 401
+
+
+# --- M2-P1-T3: password change / reset ---
+
+
+def _login(api_client: TestClient, username: str, password: str) -> str:
+    resp = api_client.post("/api/v1/auth/login", json={"username": username, "password": password})
+    assert resp.status_code == 200
+    return resp.json()["data"]["access_token"]
+
+
+def test_change_password_success(api_client: TestClient, db_session) -> None:
+    create_user(db_session, "admin", "password123", "管理员")
+    db_session.commit()
+    token = _login(api_client, "admin", "password123")
+
+    resp = api_client.put(
+        "/api/v1/auth/password",
+        json={"old_password": "password123", "new_password": "newpass456"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["message"] == "密码修改成功"
+
+
+def test_change_password_wrong_old(api_client: TestClient, db_session) -> None:
+    create_user(db_session, "admin", "password123", "管理员")
+    db_session.commit()
+    token = _login(api_client, "admin", "password123")
+
+    resp = api_client.put(
+        "/api/v1/auth/password",
+        json={"old_password": "wrongpass", "new_password": "newpass456"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "BUSINESS_RULE_FAILED"
+
+
+def test_change_password_same_as_old(api_client: TestClient, db_session) -> None:
+    create_user(db_session, "admin", "password123", "管理员")
+    db_session.commit()
+    token = _login(api_client, "admin", "password123")
+
+    resp = api_client.put(
+        "/api/v1/auth/password",
+        json={"old_password": "password123", "new_password": "password123"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 422
+
+
+def test_login_with_new_password_after_change(api_client: TestClient, db_session) -> None:
+    create_user(db_session, "admin", "password123", "管理员")
+    db_session.commit()
+    token = _login(api_client, "admin", "password123")
+
+    api_client.put(
+        "/api/v1/auth/password",
+        json={"old_password": "password123", "new_password": "newpass456"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    resp = api_client.post("/api/v1/auth/login", json={"username": "admin", "password": "newpass456"})
+
+    assert resp.status_code == 200
+
+
+def test_login_with_old_password_fails_after_change(api_client: TestClient, db_session) -> None:
+    create_user(db_session, "admin", "password123", "管理员")
+    db_session.commit()
+    token = _login(api_client, "admin", "password123")
+
+    api_client.put(
+        "/api/v1/auth/password",
+        json={"old_password": "password123", "new_password": "newpass456"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    resp = api_client.post("/api/v1/auth/login", json={"username": "admin", "password": "password123"})
+
+    assert resp.status_code == 401
+
+
+def test_change_password_requires_auth(api_client: TestClient) -> None:
+    resp = api_client.put(
+        "/api/v1/auth/password",
+        json={"old_password": "password123", "new_password": "newpass456"},
+    )
+
+    assert resp.status_code == 401
+
+
+def test_reset_password_success(api_client: TestClient, db_session) -> None:
+    create_user(db_session, "admin", "password123", "管理员")
+    target = create_user(db_session, "target", "targetpass", "用户")
+    db_session.commit()
+    token = _login(api_client, "admin", "password123")
+
+    resp = api_client.post(
+        "/api/v1/auth/password/reset",
+        json={"user_id": target.id, "new_password": "resetpass789"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json()["message"] == "密码重置成功"
+
+
+def test_reset_password_user_not_found(api_client: TestClient, db_session) -> None:
+    create_user(db_session, "admin", "password123", "管理员")
+    db_session.commit()
+    token = _login(api_client, "admin", "password123")
+
+    resp = api_client.post(
+        "/api/v1/auth/password/reset",
+        json={"user_id": 99999, "new_password": "resetpass789"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 404
+
+
+def test_reset_password_requires_auth(api_client: TestClient) -> None:
+    resp = api_client.post(
+        "/api/v1/auth/password/reset",
+        json={"user_id": 1, "new_password": "resetpass789"},
+    )
+
+    assert resp.status_code == 401
+
+
+def test_login_with_new_password_after_reset(api_client: TestClient, db_session) -> None:
+    create_user(db_session, "admin", "password123", "管理员")
+    target = create_user(db_session, "target", "targetpass", "用户")
+    db_session.commit()
+    token = _login(api_client, "admin", "password123")
+
+    api_client.post(
+        "/api/v1/auth/password/reset",
+        json={"user_id": target.id, "new_password": "resetpass789"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    resp = api_client.post("/api/v1/auth/login", json={"username": "target", "password": "resetpass789"})
+
+    assert resp.status_code == 200
+
+
+def test_login_with_old_password_fails_after_reset(api_client: TestClient, db_session) -> None:
+    create_user(db_session, "admin", "password123", "管理员")
+    target = create_user(db_session, "target", "targetpass", "用户")
+    db_session.commit()
+    token = _login(api_client, "admin", "password123")
+
+    api_client.post(
+        "/api/v1/auth/password/reset",
+        json={"user_id": target.id, "new_password": "resetpass789"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    resp = api_client.post("/api/v1/auth/login", json={"username": "target", "password": "targetpass"})
+
+    assert resp.status_code == 401
+
+
+def test_reset_password_on_disabled_user(api_client: TestClient, db_session) -> None:
+    create_user(db_session, "admin", "password123", "管理员")
+    target = create_user(db_session, "target", "targetpass", "用户")
+    target.status = "disabled"
+    db_session.commit()
+    old_hash = target.password_hash
+    token = _login(api_client, "admin", "password123")
+
+    resp = api_client.post(
+        "/api/v1/auth/password/reset",
+        json={"user_id": target.id, "new_password": "resetpass789"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    db_session.refresh(target)
+    assert target.password_hash != old_hash
+
+    resp = api_client.post("/api/v1/auth/login", json={"username": "target", "password": "resetpass789"})
+    assert resp.status_code == 401
+
+    target.status = "enabled"
+    db_session.commit()
+    resp = api_client.post("/api/v1/auth/login", json={"username": "target", "password": "resetpass789"})
+    assert resp.status_code == 200
