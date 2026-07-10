@@ -78,6 +78,7 @@ async function handleLogin(): Promise<void> {
     const redirect = String(route.query.redirect || '/')
     router.replace(redirect)
   } catch (err) {
+    console.error('[Login]', err)
     if (err instanceof ApiError) {
       errorMessage.value = err.message
     } else if (err instanceof NetworkError) {
