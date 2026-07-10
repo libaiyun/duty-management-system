@@ -7,11 +7,26 @@ import { createApp } from 'vue'
 
 import App from '@/App.vue'
 import { router } from '@/router'
+import { httpClient } from '@/services/http'
+import { useAuthStore } from '@/stores/auth'
 
 const app = createApp(App)
+const pinia = createPinia()
 
-app.use(createPinia())
+app.use(pinia)
 app.use(router)
 app.use(ElementPlus)
+
+const authStore = useAuthStore()
+
+httpClient.configureCallbacks({
+  getToken: () => authStore.accessToken || null,
+  onUnauthorized: () => {
+    authStore.forceLogout()
+    router.push({ name: 'login' })
+  },
+})
+
+authStore.restoreSession()
 
 app.mount('#app')

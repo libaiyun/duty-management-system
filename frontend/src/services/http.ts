@@ -51,12 +51,16 @@ export interface HttpClientOptions {
 export class HttpClient {
   private readonly baseUrl: string
   private readonly fetcher: typeof fetch
-  private readonly callbacks: HttpClientCallbacks
+  private callbacks: HttpClientCallbacks
 
   constructor(options: HttpClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
     this.fetcher = options.fetcher ?? fetch
     this.callbacks = options.callbacks ?? {}
+  }
+
+  configureCallbacks(callbacks: HttpClientCallbacks): void {
+    this.callbacks = callbacks
   }
 
   async get<T>(path: string): Promise<ApiResponse<T>> {

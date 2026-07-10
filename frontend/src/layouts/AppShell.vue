@@ -29,7 +29,7 @@
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item>个人设置</el-dropdown-item>
-              <el-dropdown-item divided>退出登录</el-dropdown-item>
+              <el-dropdown-item divided @click="handleLogout">退出登录</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
@@ -89,7 +89,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
   Bell,
@@ -101,16 +101,24 @@ import {
 import { filterMenuByPermission, menuItems } from '@/config/menu'
 import { useBreadcrumb } from '@/composables/useBreadcrumb'
 import { useAppStore } from '@/stores/app'
+import { useAuthStore } from '@/stores/auth'
 import { usePermissionStore } from '@/stores/permission'
 
 const appStore = useAppStore()
+const authStore = useAuthStore()
 const permissionStore = usePermissionStore()
 const route = useRoute()
+const router = useRouter()
 const { breadcrumbs } = useBreadcrumb()
 
 const visibleMenuItems = computed(() =>
   filterMenuByPermission(menuItems, (code) => permissionStore.hasPermission(code)),
 )
+
+async function handleLogout(): Promise<void> {
+  await authStore.logout()
+  router.push({ name: 'login' })
+}
 </script>
 
 <style scoped>
