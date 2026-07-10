@@ -7,15 +7,15 @@ Usage:
 import argparse
 import sys
 
-from sqlalchemy.orm import Session
-
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
 from app.models.user import SysPermission, SysRole
 from app.services.auth import create_user
 
 ALL_PERMISSION_CODES = (
+    # 与 frontend/src/types/permission.ts PERMISSION_CODES 保持同步
     "duty:schedule:view_self",
     "duty:swap:view_self",
     "duty:leave:view_self",
@@ -72,6 +72,7 @@ def cmd_create_admin(args: argparse.Namespace) -> None:
         db.commit()
         print(f"Admin user created: id={user.id}, username={user.username}")
     except IntegrityError:
+        # 唯一冲突只可能是 username（权限/角色 code 由本脚本生成不冲突）
         db.rollback()
         print(f"Error: username '{args.username}' already exists", file=sys.stderr)
         sys.exit(1)
