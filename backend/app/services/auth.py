@@ -12,6 +12,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.models.organization import OrgUnit
 from app.models.user import SysDataScope, SysPermission, SysRole, SysUser, sys_role_permission, sys_user_role
 
 
@@ -202,3 +203,48 @@ def assign_role_permissions(db: Session, role_id: int, permission_ids: list[int]
 
 def list_permissions(db: Session) -> list[SysPermission]:
     return list(db.scalars(select(SysPermission).order_by(SysPermission.id)).all())
+
+
+def list_org_units(db: Session) -> list[OrgUnit]:
+    return list(db.scalars(select(OrgUnit).order_by(OrgUnit.sort_order, OrgUnit.id)).all())
+
+
+def create_org_unit(
+    db: Session, code: str, name: str, type_: str,
+    parent_id: int | None = None, sort_order: int = 0,
+) -> OrgUnit:
+    unit = OrgUnit(code=code, name=name, type=type_, parent_id=parent_id, sort_order=sort_order)
+    db.add(unit)
+    db.flush()
+    return unit
+
+
+def update_org_unit(
+    db: Session, unit_id: int,
+    parent_id: int | None, name: str | None, status: str | None, sort_order: int | None,
+) -> OrgUnit:
+    unit = db.get(OrgUnit, unit_id)
+    if unit is None:
+        raise NotFoundError(message="组织不存在")
+    if parent_id is not None:
+        unit.parent_id = parent_id
+    if name is not None:
+        unit.name = name
+    if status is not None:
+        unit.status = status
+    if sort_order is not None:
+        unit.sort_order = sort_order
+    db.flush()
+    return unit
+
+
+def get_org_unit_children(db: Session, parent_id: int | None) -> list[OrgUnit]:
+    return list(db.scalars(
+        select(OrgUnit).where(OrgUnit.parent_id == parent_id).order_by(OrgUnit.sort_order, OrgUnit.id)
+    ).all())
+
+
+def check_org_unit_referenced(db: Session, unit_id: int) -> bool:
+    return db.scalar(
+        exists().where(OrgUnit.parent_id == unit_id).select()
+    ) or False
