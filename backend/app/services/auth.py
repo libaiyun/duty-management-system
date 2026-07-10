@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -10,7 +10,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
-from app.models.user import SysUser
+from app.models.user import SysPermission, SysUser, sys_role_permission, sys_user_role
 
 
 def authenticate_user(db: Session, username: str, password: str) -> SysUser:
@@ -71,3 +71,16 @@ def reset_user_password(db: Session, user_id: int, new_password: str) -> None:
         raise NotFoundError(message="用户不存在或已注销")
     user.password_hash = hash_password(new_password)
     db.flush()
+
+
+def check_user_permission(db: Session, user: SysUser, permission_code: str) -> bool:
+    stmt = (
+        exists()
+        .where(
+            SysPermission.code == permission_code,
+            SysPermission.id == sys_role_permission.c.permission_id,
+            sys_role_permission.c.role_id == sys_user_role.c.role_id,
+            sys_user_role.c.user_id == user.id,
+        )
+    )
+    return db.scalar(select(stmt)) or False

@@ -1,6 +1,8 @@
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
+from app.models.user import SysPermission, SysRole, SysUser
 from app.services.auth import create_user
 
 pytestmark = pytest.mark.usefixtures("create_tables")
@@ -121,6 +123,27 @@ def test_me_with_invalid_token(api_client: TestClient) -> None:
     assert resp.status_code == 401
 
 
+# --- M2-P1-T4: permission helpers ---
+
+
+def _create_permission(db: Session, code: str, name: str = "") -> SysPermission:
+    perm = SysPermission(code=code, name=name or code, type="api")
+    db.add(perm)
+    db.flush()
+    return perm
+
+
+def _grant_permission(db: Session, user: SysUser, permission_code: str) -> None:
+    perm = _create_permission(db, permission_code)
+    role_code = "role-" + permission_code.replace(":", "-")
+    role = SysRole(code=role_code, name=permission_code)
+    role.permissions.append(perm)
+    db.add(role)
+    db.flush()
+    user.roles.append(role)
+    db.flush()
+
+
 # --- M2-P1-T3: password change / reset ---
 
 
@@ -216,8 +239,9 @@ def test_change_password_requires_auth(api_client: TestClient) -> None:
 
 
 def test_reset_password_success(api_client: TestClient, db_session) -> None:
-    create_user(db_session, "admin", "password123", "管理员")
+    admin = create_user(db_session, "admin", "password123", "管理员")
     target = create_user(db_session, "target", "targetpass", "用户")
+    _grant_permission(db_session, admin, "system:user:manage")
     db_session.commit()
     token = _login(api_client, "admin", "password123")
 
@@ -232,7 +256,8 @@ def test_reset_password_success(api_client: TestClient, db_session) -> None:
 
 
 def test_reset_password_user_not_found(api_client: TestClient, db_session) -> None:
-    create_user(db_session, "admin", "password123", "管理员")
+    admin = create_user(db_session, "admin", "password123", "管理员")
+    _grant_permission(db_session, admin, "system:user:manage")
     db_session.commit()
     token = _login(api_client, "admin", "password123")
 
@@ -255,8 +280,9 @@ def test_reset_password_requires_auth(api_client: TestClient) -> None:
 
 
 def test_login_with_new_password_after_reset(api_client: TestClient, db_session) -> None:
-    create_user(db_session, "admin", "password123", "管理员")
+    admin = create_user(db_session, "admin", "password123", "管理员")
     target = create_user(db_session, "target", "targetpass", "用户")
+    _grant_permission(db_session, admin, "system:user:manage")
     db_session.commit()
     token = _login(api_client, "admin", "password123")
 
@@ -272,8 +298,9 @@ def test_login_with_new_password_after_reset(api_client: TestClient, db_session)
 
 
 def test_login_with_old_password_fails_after_reset(api_client: TestClient, db_session) -> None:
-    create_user(db_session, "admin", "password123", "管理员")
+    admin = create_user(db_session, "admin", "password123", "管理员")
     target = create_user(db_session, "target", "targetpass", "用户")
+    _grant_permission(db_session, admin, "system:user:manage")
     db_session.commit()
     token = _login(api_client, "admin", "password123")
 
@@ -289,8 +316,9 @@ def test_login_with_old_password_fails_after_reset(api_client: TestClient, db_se
 
 
 def test_reset_password_on_disabled_user(api_client: TestClient, db_session) -> None:
-    create_user(db_session, "admin", "password123", "管理员")
+    admin = create_user(db_session, "admin", "password123", "管理员")
     target = create_user(db_session, "target", "targetpass", "用户")
+    _grant_permission(db_session, admin, "system:user:manage")
     target.status = "disabled"
     db_session.commit()
     old_hash = target.password_hash
@@ -313,3 +341,52 @@ def test_reset_password_on_disabled_user(api_client: TestClient, db_session) -> 
     db_session.commit()
     resp = api_client.post("/api/v1/auth/login", json={"username": "target", "password": "resetpass789"})
     assert resp.status_code == 200
+
+
+# --- M2-P1-T4: permission checks ---
+
+
+def test_reset_password_without_permission(api_client: TestClient, db_session) -> None:
+    admin = create_user(db_session, "admin", "password123", "管理员")
+    target = create_user(db_session, "target", "targetpass", "用户")
+    db_session.commit()
+    token = _login(api_client, "admin", "password123")
+
+    resp = api_client.post(
+        "/api/v1/auth/password/reset",
+        json={"user_id": target.id, "new_password": "resetpass789"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 403
+
+
+def test_reset_password_with_wrong_permission(api_client: TestClient, db_session) -> None:
+    admin = create_user(db_session, "admin", "password123", "管理员")
+    target = create_user(db_session, "target", "targetpass", "用户")
+    _grant_permission(db_session, admin, "duty:schedule:view_self")
+    db_session.commit()
+    token = _login(api_client, "admin", "password123")
+
+    resp = api_client.post(
+        "/api/v1/auth/password/reset",
+        json={"user_id": target.id, "new_password": "resetpass789"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 403
+
+
+def test_reset_password_worker_cannot_elevate(api_client: TestClient, db_session) -> None:
+    worker = create_user(db_session, "worker", "workerpass", "普通用户")
+    _grant_permission(db_session, worker, "duty:schedule:view_self")
+    db_session.commit()
+    token = _login(api_client, "worker", "workerpass")
+
+    resp = api_client.post(
+        "/api/v1/auth/password/reset",
+        json={"user_id": worker.id, "new_password": "hacked"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 403

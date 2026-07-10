@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_db
+from app.api.deps import RequirePermission, _get_settings, get_db
 from app.core.config import Settings
 from app.core.security import get_current_user
 from app.schemas.auth import (
@@ -24,10 +24,6 @@ from app.services.auth import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-
-def _get_settings(request: Request) -> Settings:
-    return request.app.state.settings  # type: ignore[no-any-return]
 
 
 @router.post("/login", response_model=ApiResponse[TokenResponse])
@@ -88,11 +84,9 @@ def change_password(
 @router.post("/password/reset", response_model=ApiResponse[None])
 def reset_password(
     body: ResetPasswordRequest,
-    request: Request,
     db: Session = Depends(get_db),
-    settings: Settings = Depends(_get_settings),
+    _user: None = Depends(RequirePermission("system:user:manage")),
 ) -> ApiResponse[None]:
-    get_current_user(settings, request, db)
     reset_user_password(db, body.user_id, body.new_password)
     db.commit()
     return ok(message="密码重置成功")
