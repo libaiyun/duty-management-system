@@ -2,6 +2,7 @@ from typing import Annotated
 
 from fastapi import Query
 
+from app.db.session import get_db  # noqa: F401 — re-exported for route dependencies
 from app.schemas.pagination import PageParams
 
 
