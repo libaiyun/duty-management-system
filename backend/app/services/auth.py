@@ -17,6 +17,7 @@ from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
 from app.models.user import SysDataScope, SysPermission, SysRole, SysUser, sys_role_permission, sys_user_role
+from app.services.schedule import generate_schedule_from_rule
 
 def authenticate_user(db: Session, username: str, password: str) -> SysUser:
     user = db.scalar(select(SysUser).where(SysUser.username == username))
@@ -582,113 +583,6 @@ def _validate_cells(
         )
 
 
-def _generate_schedule_from_rule(
-    db: Session, rule: ShiftRule, version: ShiftRuleVersion,
-) -> int:
-    from app.models.schedule import MonthlySchedule as _MS
-    from app.models.schedule import ScheduleDay as _SDay
-    from app.models.schedule import ScheduleShift as _SShift
-    from app.models.schedule import ScheduleShiftPerson as _SSP
-
-    if rule.org_unit_id is None:
-        return 0
-
-    existing = db.scalars(
-        select(_MS).where(_MS.org_unit_id == rule.org_unit_id)
-    ).first()
-    ms = existing or _MS(
-        org_unit_id=rule.org_unit_id,  # type: ignore[arg-type]
-        rule_id=int(rule.id),  # type: ignore[arg-type]
-        rule_version_id=int(version.id),  # type: ignore[arg-type]
-        status="draft",
-        generated_at=datetime.now(),
-    )
-    if existing:
-        ms.rule_version_id = int(version.id)  # type: ignore[arg-type]
-        ms.generated_at = datetime.now()
-
-    db.add(ms)
-    db.flush()
-
-    items = list(db.scalars(
-        select(ShiftRuleItem)
-        .where(ShiftRuleItem.version_id == int(version.id))  # type: ignore[arg-type]
-        .order_by(ShiftRuleItem.day_no)
-    ).all())
-
-    if not items:
-        return 0
-
-    sd = date.fromisoformat(rule.start_date)
-    day_count = 0
-    tomorrow = date.today() + timedelta(days=1)
-    end_date = max(sd, tomorrow) + timedelta(days=365)
-
-    current_date = sd
-    while current_date <= end_date:
-        cycle_index = (current_date - sd).days % rule.cycle_days
-        item = items[cycle_index]
-
-        existing_day = db.scalars(
-            select(_SDay).where(
-                _SDay.schedule_id == int(ms.id),  # type: ignore[arg-type]
-                _SDay.duty_date == current_date,
-            )
-        ).first()
-        if existing_day:
-            if current_date < tomorrow:
-                current_date += timedelta(days=1)
-                continue
-            db.delete(existing_day)
-
-        sday = _SDay(
-            schedule_id=int(ms.id),  # type: ignore[arg-type]
-            duty_date=current_date,
-            weekday=current_date.weekday(),
-            is_legal_holiday=False,
-        )
-        db.add(sday)
-        db.flush()
-
-        for shift_def_id_str, person_ids in item.cell_persons.items():
-            shift_def_id = int(shift_def_id_str)
-            shift_def = db.get(ShiftDef, shift_def_id)
-            if not shift_def:
-                continue
-
-            shift_start = datetime.combine(
-                current_date,
-                datetime.strptime(shift_def.start_time, "%H:%M").time(),
-            )
-            shift_end = datetime.combine(
-                current_date,
-                datetime.strptime(shift_def.end_time, "%H:%M").time(),
-            )
-
-            ss = _SShift(
-                schedule_day_id=int(sday.id),  # type: ignore[arg-type]
-                shift_def_id=shift_def_id,
-                start_at=shift_start,
-                end_at=shift_end,
-                status="normal",
-            )
-            db.add(ss)
-            db.flush()
-
-            for pos, pid in enumerate(person_ids, 1):
-                db.add(_SSP(
-                    schedule_shift_id=int(ss.id),  # type: ignore[arg-type]
-                    person_id=pid,
-                    position_no=pos,
-                    source_type="auto",
-                ))
-
-        day_count += 1
-        current_date += timedelta(days=1)
-
-    return day_count
-
-
 def list_shift_rules(db: Session) -> list[ShiftRule]:
     return list(db.scalars(select(ShiftRule).order_by(ShiftRule.id)).all())
 
@@ -847,7 +741,7 @@ def publish_shift_rule(db: Session, rule_id: int) -> ShiftRule:
     latest_version.status = "published"
     rule.status = "published"
     db.flush()
-    _generate_schedule_from_rule(db, rule, latest_version)
+    generate_schedule_from_rule(db, rule, latest_version)
     return rule
 
 

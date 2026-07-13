@@ -62,11 +62,6 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column prop="rotation_order" label="轮班顺序" width="100" align="center">
-        <template #default="{ row }">
-          {{ row.participate_schedule ? (row.rotation_order ?? '-') : '-' }}
-        </template>
-      </el-table-column>
       <el-table-column label="状态" width="80" align="center">
         <template #default="{ row }">
           <el-tag :type="row.status === 'enabled' ? 'success' : 'danger'" size="small">
@@ -138,9 +133,6 @@
         <el-form-item label="参与排班">
           <el-switch v-model="formData.participate_schedule" />
         </el-form-item>
-        <el-form-item v-if="formData.participate_schedule" label="轮班顺序">
-          <el-input-number v-model="formData.rotation_order" :min="1" style="width: 100%" />
-        </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="formData.remark" type="textarea" :rows="3" />
         </el-form-item>
@@ -176,7 +168,6 @@ interface PersonItem {
   person_type: string
   phone: string | null
   participate_schedule: boolean
-  rotation_order: number | null
   status: string
   remark: string | null
 }
@@ -256,7 +247,6 @@ const formData = reactive({
   org_unit_id: null as number | null,
   phone: '',
   participate_schedule: false,
-  rotation_order: null as number | null,
   remark: '',
 })
 const formRules: FormRules = {
@@ -325,7 +315,6 @@ function openCreateDialog() {
   formData.org_unit_id = null
   formData.phone = ''
   formData.participate_schedule = false
-  formData.rotation_order = null
   formData.remark = ''
   formVisible.value = true
 }
@@ -338,7 +327,6 @@ function openEditDialog(person: PersonItem) {
   formData.org_unit_id = person.org_unit_id
   formData.phone = person.phone || ''
   formData.participate_schedule = person.participate_schedule
-  formData.rotation_order = person.rotation_order
   formData.remark = person.remark || ''
   formVisible.value = true
 }
@@ -351,7 +339,6 @@ function resetForm() {
   formData.org_unit_id = null
   formData.phone = ''
   formData.participate_schedule = false
-  formData.rotation_order = null
   formData.remark = ''
   formRef.value?.resetFields()
 }
@@ -367,7 +354,6 @@ async function save() {
         org_unit_id: formData.org_unit_id,
         phone: formData.phone || null,
         participate_schedule: formData.participate_schedule,
-        rotation_order: formData.participate_schedule ? formData.rotation_order : null,
         remark: formData.remark || null,
       })
       ElMessage.success('编辑成功')
@@ -379,7 +365,6 @@ async function save() {
         org_unit_id: formData.org_unit_id,
         phone: formData.phone || null,
         participate_schedule: formData.participate_schedule,
-        rotation_order: formData.participate_schedule ? formData.rotation_order : null,
         remark: formData.remark || null,
       })
       ElMessage.success('创建成功')

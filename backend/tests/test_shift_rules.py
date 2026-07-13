@@ -469,6 +469,15 @@ class TestScheduleGeneration:
         db_session.commit()
         return org, [p1, p2]
 
+    def _create_shift_defs(self, db_session):
+        from app.models.shift import ShiftDef
+        early = ShiftDef(code="early", name="早班", start_time="00:00", end_time="08:00", display_order=1)
+        mid = ShiftDef(code="mid", name="中班", start_time="08:00", end_time="16:00", display_order=2)
+        late = ShiftDef(code="late", name="晚班", start_time="16:00", end_time="00:00", display_order=3)
+        db_session.add_all([early, mid, late])
+        db_session.commit()
+        return early, mid, late
+
     def test_publish_generates_schedule(self, api_client: TestClient, db_session) -> None:
         org, persons = self._setup_org_with_persons(db_session)
         _, token = _create_admin(api_client, db_session)
@@ -518,6 +527,261 @@ class TestScheduleGeneration:
                                headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
         assert resp.json()["data"]["status"] == "published"
+
+    # ── M3-P1-T3: 排班生成专项测试 ──
+
+    def test_multi_cycle_repeats_pattern(self, db_session) -> None:
+        """M3-P1-T3: N=3 天循环 10 天，Day 4 应与 Day 1 相同"""
+        from datetime import date as _date
+        from app.services.schedule import generate_schedule_from_rule
+
+        org, persons = self._setup_org_with_persons(db_session)
+        early, mid, late = self._create_shift_defs(db_session)
+
+        rule = ShiftRule(
+            code="r_cycle", name="循环测试",
+            cycle_days=3, start_date="2026-12-01", persons_per_cell=1,
+            org_unit_id=org.id, status="draft",
+        )
+        db_session.add(rule)
+        db_session.flush()
+
+        v = ShiftRuleVersion(
+            rule_id=rule.id, version_no=1,
+            cycle_days=rule.cycle_days, start_date=rule.start_date,
+            persons_per_cell=rule.persons_per_cell,
+            snapshot={"days": []}, status="published",
+        )
+        db_session.add(v)
+        db_session.flush()
+
+        # Day 1: early=P1, mid=P1, late=P2
+        # Day 2: early=P2, mid=P2, late=P1
+        # Day 3: early=P1, mid=P2, late=P1
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=1, cell_persons={
+            str(early.id): [persons[0].id], str(mid.id): [persons[0].id], str(late.id): [persons[1].id],
+        }))
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=2, cell_persons={
+            str(early.id): [persons[1].id], str(mid.id): [persons[1].id], str(late.id): [persons[0].id],
+        }))
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=3, cell_persons={
+            str(early.id): [persons[0].id], str(mid.id): [persons[1].id], str(late.id): [persons[0].id],
+        }))
+        db_session.commit()
+
+        # generate 10 days
+        generate_schedule_from_rule(db_session, rule, v, total_days=10)
+
+        from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
+        ms = db_session.query(MonthlySchedule).filter(
+            MonthlySchedule.org_unit_id == org.id
+        ).first()
+        assert ms is not None
+
+        days = db_session.query(ScheduleDay).filter(
+            ScheduleDay.schedule_id == ms.id
+        ).order_by(ScheduleDay.duty_date).all()
+        assert len(days) == 11  # from 12/01 to 12/11 inclusive
+
+        def _first_person(day, sdef):
+            shifts = db_session.query(ScheduleShift).filter(
+                ScheduleShift.schedule_day_id == day.id,
+                ScheduleShift.shift_def_id == sdef.id,
+            ).all()
+            assert len(shifts) == 1
+            spa = db_session.query(ScheduleShiftPerson).filter(
+                ScheduleShiftPerson.schedule_shift_id == shifts[0].id,
+            ).order_by(ScheduleShiftPerson.position_no).all()
+            return spa[0].person_id
+
+        d1_early = _first_person(days[0], early)  # Dec 1
+        d4_early = _first_person(days[3], early)  # Dec 4 = (Dec 4 - Dec 1) = 3 days, 3 % 3 = 0
+        assert d1_early == d4_early
+
+    def test_cross_month_continuity(self, db_session) -> None:
+        """M3-P1-T3: 7 月 30 日起生成，8 月日期正确延续"""
+        from datetime import date as _date
+        from app.services.schedule import generate_schedule_from_rule
+
+        org, persons = self._setup_org_with_persons(db_session)
+        early, _mid, _late = self._create_shift_defs(db_session)
+
+        rule = ShiftRule(
+            code="r_month", name="跨月测试",
+            cycle_days=2, start_date="2026-07-30", persons_per_cell=1,
+            org_unit_id=org.id, status="draft",
+        )
+        db_session.add(rule)
+        db_session.flush()
+
+        v = ShiftRuleVersion(
+            rule_id=rule.id, version_no=1,
+            cycle_days=rule.cycle_days, start_date=rule.start_date,
+            persons_per_cell=rule.persons_per_cell,
+            snapshot={"days": []}, status="published",
+        )
+        db_session.add(v)
+        db_session.flush()
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=1, cell_persons={
+            str(early.id): [persons[0].id],
+        }))
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=2, cell_persons={
+            str(early.id): [persons[1].id],
+        }))
+        db_session.commit()
+
+        generate_schedule_from_rule(db_session, rule, v, total_days=5)
+
+        from app.models.schedule import MonthlySchedule, ScheduleDay
+        ms = db_session.query(MonthlySchedule).filter(
+            MonthlySchedule.org_unit_id == org.id
+        ).first()
+        assert ms is not None
+
+        days = db_session.query(ScheduleDay).filter(
+            ScheduleDay.schedule_id == ms.id
+        ).order_by(ScheduleDay.duty_date).all()
+        dates = [d.duty_date for d in days]
+        assert _date(2026, 7, 30) in dates
+        assert _date(2026, 7, 31) in dates
+        assert _date(2026, 8, 1) in dates
+        assert _date(2026, 8, 2) in dates
+        assert _date(2026, 8, 3) in dates
+        assert _date(2026, 8, 4) in dates
+
+    def test_holiday_flagging(self, db_session) -> None:
+        """M3-P1-T3: 节假日日期 is_legal_holiday=True, holiday_name 正确"""
+        from datetime import date as _date
+        from app.models.holiday import HolidayCalendar
+        from app.services.schedule import generate_schedule_from_rule
+
+        org, persons = self._setup_org_with_persons(db_session)
+        early, _mid, _late = self._create_shift_defs(db_session)
+
+        db_session.add(HolidayCalendar(
+            holiday_date=_date(2026, 10, 1), holiday_name="国庆节",
+            year=2026, is_legal=True, status="enabled",
+        ))
+        db_session.add(HolidayCalendar(
+            holiday_date=_date(2026, 10, 2), holiday_name="国庆节",
+            year=2026, is_legal=True, status="enabled",
+        ))
+        db_session.commit()
+
+        rule = ShiftRule(
+            code="r_holiday", name="节假日测试",
+            cycle_days=1, start_date="2026-10-01", persons_per_cell=1,
+            org_unit_id=org.id, status="draft",
+        )
+        db_session.add(rule)
+        db_session.flush()
+
+        v = ShiftRuleVersion(
+            rule_id=rule.id, version_no=1,
+            cycle_days=rule.cycle_days, start_date=rule.start_date,
+            persons_per_cell=rule.persons_per_cell,
+            snapshot={"days": []}, status="published",
+        )
+        db_session.add(v)
+        db_session.flush()
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=1, cell_persons={
+            str(early.id): [persons[0].id],
+        }))
+        db_session.commit()
+
+        generate_schedule_from_rule(db_session, rule, v, total_days=3)
+
+        from app.models.schedule import MonthlySchedule, ScheduleDay
+        ms = db_session.query(MonthlySchedule).filter(
+            MonthlySchedule.org_unit_id == org.id
+        ).first()
+        days = db_session.query(ScheduleDay).filter(
+            ScheduleDay.schedule_id == ms.id
+        ).order_by(ScheduleDay.duty_date).all()
+
+        d1 = next(d for d in days if d.duty_date == _date(2026, 10, 1))
+        assert d1.is_legal_holiday is True
+        assert d1.holiday_name == "国庆节"
+
+        d2 = next(d for d in days if d.duty_date == _date(2026, 10, 2))
+        assert d2.is_legal_holiday is True
+        assert d2.holiday_name == "国庆节"
+
+        d3 = next(d for d in days if d.duty_date == _date(2026, 10, 3))
+        assert d3.is_legal_holiday is False
+        assert d3.holiday_name is None
+
+    def test_republish_overwrites_future(self, db_session) -> None:
+        """M3-P1-T3: 重新发布刷新未来排班"""
+        from datetime import date as _date
+        from app.services.schedule import generate_schedule_from_rule
+
+        org, persons = self._setup_org_with_persons(db_session)
+        early, _mid, _late = self._create_shift_defs(db_session)
+
+        rule = ShiftRule(
+            code="r_repub", name="重新发布测试",
+            cycle_days=2, start_date="2026-12-01", persons_per_cell=1,
+            org_unit_id=org.id, status="draft",
+        )
+        db_session.add(rule)
+        db_session.flush()
+
+        v1 = ShiftRuleVersion(
+            rule_id=rule.id, version_no=1,
+            cycle_days=rule.cycle_days, start_date=rule.start_date,
+            persons_per_cell=rule.persons_per_cell,
+            snapshot={"days": []}, status="published",
+        )
+        db_session.add(v1)
+        db_session.flush()
+        db_session.add(ShiftRuleItem(version_id=v1.id, day_no=1, cell_persons={
+            str(early.id): [persons[0].id],
+        }))
+        db_session.add(ShiftRuleItem(version_id=v1.id, day_no=2, cell_persons={
+            str(early.id): [persons[0].id],
+        }))
+        db_session.commit()
+
+        generate_schedule_from_rule(db_session, rule, v1, total_days=3)
+
+        from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
+        ms = db_session.query(MonthlySchedule).filter(
+            MonthlySchedule.org_unit_id == org.id
+        ).first()
+
+        # change to v2 — Day 2 now uses person[1]
+        v2 = ShiftRuleVersion(
+            rule_id=rule.id, version_no=2,
+            cycle_days=rule.cycle_days, start_date=rule.start_date,
+            persons_per_cell=rule.persons_per_cell,
+            snapshot={"days": []}, status="published",
+        )
+        db_session.add(v2)
+        db_session.flush()
+        db_session.add(ShiftRuleItem(version_id=v2.id, day_no=1, cell_persons={
+            str(early.id): [persons[0].id],
+        }))
+        db_session.add(ShiftRuleItem(version_id=v2.id, day_no=2, cell_persons={
+            str(early.id): [persons[1].id],
+        }))
+        db_session.commit()
+
+        generate_schedule_from_rule(db_session, rule, v2, total_days=3)
+
+        days = db_session.query(ScheduleDay).filter(
+            ScheduleDay.schedule_id == ms.id
+        ).order_by(ScheduleDay.duty_date).all()
+        assert len(days) >= 3
+
+        day2 = next(d for d in days if d.duty_date == _date(2026, 12, 2))
+        shift = db_session.query(ScheduleShift).filter(
+            ScheduleShift.schedule_day_id == day2.id
+        ).first()
+        sp = db_session.query(ScheduleShiftPerson).filter(
+            ScheduleShiftPerson.schedule_shift_id == shift.id
+        ).first()
+        assert sp.person_id == persons[1].id
 
 
 class TestPersonFilter:
