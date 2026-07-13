@@ -258,12 +258,13 @@ const permSaving = ref(false)
 const assignTargetRole = ref<RoleItem | null>(null)
 const selectedPermIds = ref<number[]>([])
 
+const route = useRoute()
+
 onMounted(() => {
   loadUsers()
   loadRoles()
   loadPermissions()
   loadPersons().then(() => {
-    const route = useRoute()
     const bindPersonId = route.query.bindPersonId
     if (bindPersonId) {
       openUserDialog(null)

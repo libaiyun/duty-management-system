@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import AppEnvironment, Settings
@@ -68,6 +68,7 @@ def sqlite_database_url(tmp_path: Path) -> str:
 @pytest.fixture
 def sqlite_engine(sqlite_database_url: str) -> Generator[Engine, None, None]:
     engine = create_engine(sqlite_database_url)
+    event.listen(engine, "connect", lambda conn, _: conn.execute("PRAGMA foreign_keys=ON"))
     try:
         yield engine
     finally:
