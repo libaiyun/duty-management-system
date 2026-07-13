@@ -592,3 +592,112 @@ class TestScheduleDaysRangeApi:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 403
+
+
+class TestScheduleGenerateApi:
+    """M3-P1-T4: 生成/刷新排班 API"""
+
+    def _setup_published_rule_with_schedule(self, db_session):
+        from app.models.shift import ShiftRuleItem, ShiftRuleVersion
+
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session, "early", "早班")
+        p1 = _create_person(db_session, org, "P001", "张三")
+        p2 = _create_person(db_session, org, "P002", "李四")
+
+        rule.org_unit_id = org.id
+        rule.status = "published"
+        db_session.commit()
+
+        v = ShiftRuleVersion(
+            rule_id=rule.id, version_no=1,
+            cycle_days=rule.cycle_days, start_date=rule.start_date,
+            persons_per_cell=rule.persons_per_cell,
+            snapshot={"days": []}, status="published",
+        )
+        db_session.add(v)
+        db_session.flush()
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=1, cell_persons={
+            str(early.id): [p1.id, p2.id],
+        }))
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=2, cell_persons={
+            str(early.id): [p2.id, p1.id],
+        }))
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=3, cell_persons={
+            str(early.id): [p1.id, p2.id],
+        }))
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=4, cell_persons={
+            str(early.id): [p2.id, p1.id],
+        }))
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=5, cell_persons={
+            str(early.id): [p1.id, p2.id],
+        }))
+        db_session.add(ShiftRuleItem(version_id=v.id, day_no=6, cell_persons={
+            str(early.id): [p2.id, p1.id],
+        }))
+        db_session.commit()
+
+        ms = MonthlySchedule(
+            org_unit_id=org.id, rule_id=rule.id, rule_version_id=v.id,
+            status="draft",
+        )
+        db_session.add(ms)
+        db_session.commit()
+        return ms, rule, v, org, early, [p1, p2]
+
+    def test_generate_creates_schedule_days(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T4: 生成排班日数据"""
+        ms, _rule, _v, _org, _early, _persons = self._setup_published_rule_with_schedule(db_session)
+        _, token = _create_admin(api_client, db_session)
+
+        resp = api_client.post(
+            f"/api/v1/schedules/{ms.id}/generate",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["status"] == "draft"
+        assert data["generated_at"] is not None
+        assert data["day_count"] > 0
+
+    def test_generate_schedule_not_found(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T4: 排班不存在 404"""
+        _, token = _create_admin(api_client, db_session)
+        resp = api_client.post(
+            "/api/v1/schedules/99999/generate",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404
+
+    def test_generate_rule_not_published(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T4: 规则未发布 422"""
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session)
+        p1 = _create_person(db_session, org, "P001", "张三")
+        ms = _build_full_schedule(db_session, org, rule, [early], [p1])
+
+        _, token = _create_admin(api_client, db_session)
+        resp = api_client.post(
+            f"/api/v1/schedules/{ms.id}/generate",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422
+
+    def test_generate_requires_permission(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T4: 无权限 403"""
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session)
+        p1 = _create_person(db_session, org, "P001", "张三")
+        ms = _build_full_schedule(db_session, org, rule, [early], [p1])
+
+        create_user(db_session, "nogen", "pass", "无权限")
+        db_session.commit()
+        token = _login(api_client, db_session, "nogen", "pass")
+        resp = api_client.post(
+            f"/api/v1/schedules/{ms.id}/generate",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 403

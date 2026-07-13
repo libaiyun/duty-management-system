@@ -1,11 +1,13 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.api.deps import RequirePermission, get_db, get_page_params
 from app.core.exceptions import BusinessRuleError, NotFoundError
 from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
+from app.models.shift import ShiftRule, ShiftRuleVersion
 from app.models.user import SysUser
 from app.schemas.pagination import PageParams, PageResponse
 from app.schemas.response import ApiResponse, ok
@@ -16,7 +18,13 @@ from app.schemas.schedule import (
     ScheduleShiftResponse,
 )
 from app.services.auth import resolve_scoped_org_unit_ids
-from app.services.schedule import get_schedule, get_schedule_days, get_schedule_days_by_range, list_schedules
+from app.services.schedule import (
+    generate_schedule_from_rule,
+    get_schedule,
+    get_schedule_days,
+    get_schedule_days_by_range,
+    list_schedules,
+)
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 
@@ -157,3 +165,32 @@ def get_schedule_days_range_endpoint(
         raise BusinessRuleError(message="起始日期不能晚于结束日期")
     days = get_schedule_days_by_range(db, id, from_date=from_date, to_date=to_date)
     return ok([_build_day_response(d) for d in days])
+
+
+@router.post("/{id}/generate", response_model=ApiResponse[ScheduleResponse])
+def generate_schedule_endpoint(
+    id: int,
+    db: Session = Depends(get_db),
+    _perm: None = Depends(RequirePermission("schedule:monthly:view")),
+) -> ApiResponse[ScheduleResponse]:
+    schedule = get_schedule(db, id)
+    if schedule is None:
+        raise NotFoundError(message="排班记录不存在")
+
+    rule = db.get(ShiftRule, schedule.rule_id)
+    if rule is None or rule.status != "published":
+        raise BusinessRuleError(message="关联的排班规则未发布")
+
+    latest_version = db.scalars(
+        select(ShiftRuleVersion)
+        .where(ShiftRuleVersion.rule_id == rule.id)
+        .where(ShiftRuleVersion.status == "published")
+        .order_by(ShiftRuleVersion.version_no.desc())
+        .limit(1)
+    ).first()
+    if latest_version is None:
+        raise BusinessRuleError(message="规则没有已发布的版本")
+
+    generate_schedule_from_rule(db, rule, latest_version)
+    db.refresh(schedule)
+    return ok(_build_schedule_response(schedule))
