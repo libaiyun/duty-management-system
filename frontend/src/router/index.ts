@@ -19,6 +19,7 @@ const CUSTOM_VIEWS: Record<string, unknown> = {
   person: () => import('@/views/base-data/PersonView.vue'),
   'shift-rule': () => import('@/views/base-data/ShiftRuleView.vue'),
   'holiday-standard': () => import('@/views/base-data/HolidayView.vue'),
+  'monthly-schedule': () => import('@/views/schedule/ScheduleCalendarView.vue'),
 }
 
 function buildRoutes(items: MenuItem[]): RouteRecordRaw[] {
