@@ -42,7 +42,7 @@ def create_user_endpoint(
     db: Session = Depends(get_db),
     _perm: None = Depends(RequirePermission("system:user:manage")),
 ) -> ApiResponse[UserResponse]:
-    user = create_user(db, body.username, body.password, body.display_name)
+    user = create_user(db, body.username, body.password, body.display_name, body.person_id)
     db.commit()
     return ok(UserResponse.model_validate(user))
 
@@ -77,7 +77,11 @@ def update_user_endpoint(
     db: Session = Depends(get_db),
     _perm: None = Depends(RequirePermission("system:user:manage")),
 ) -> ApiResponse[UserResponse]:
-    user = update_user(db, user_id, body.display_name, body.status)
+    update_person = "person_id" in body.model_fields_set
+    user = update_user(
+        db, user_id, body.display_name, body.status,
+        body.person_id, update_person,
+    )
     db.commit()
     return ok(UserResponse.model_validate(user))
 

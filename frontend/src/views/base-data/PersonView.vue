@@ -94,7 +94,7 @@
           >
             {{ row.status === 'enabled' ? '停用' : '启用' }}
           </el-button>
-          <el-button size="small" @click="goToBindAccount">绑定账号</el-button>
+          <el-button size="small" @click="goToBindAccount(row)">绑定账号</el-button>
         </template>
       </el-table-column>
     </el-table>
@@ -407,8 +407,8 @@ async function toggleStatus(person: PersonItem) {
   }
 }
 
-function goToBindAccount() {
-  router.push({ name: 'account-role' })
+function goToBindAccount(person: PersonItem) {
+  router.push({ name: 'account-role', query: { bindPersonId: person.id, bindPersonName: `${person.name}（${person.code}）` } })
 }
 </script>
 

@@ -125,3 +125,104 @@ class TestRoleApi:
 
         resp = api_client.get("/api/v1/permissions", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
+
+
+class TestUserPersonBinding:
+    def test_create_user_with_person(self, api_client: TestClient, db_session) -> None:
+        from app.models.organization import OrgUnit
+        from app.models.person import Person
+
+        _, token = _create_admin(api_client, db_session)
+        org = OrgUnit(code="bind-org", name="测试组织", type="station")
+        person = Person(code="BIND1", name="绑定人员", person_type="duty_operator", org_unit=org)
+        db_session.add_all([org, person])
+        db_session.commit()
+
+        resp = api_client.post(
+            "/api/v1/users",
+            json={"username": "bind1", "password": "pass", "display_name": "绑定用户", "person_id": person.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert data["person_id"] == person.id
+
+    def test_create_user_with_invalid_person_returns_404(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+
+        resp = api_client.post(
+            "/api/v1/users",
+            json={"username": "badbind", "password": "pass", "display_name": "坏绑定", "person_id": 99999},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404
+
+    def test_create_user_person_already_bound_returns_409(self, api_client: TestClient, db_session) -> None:
+        from app.models.organization import OrgUnit
+        from app.models.person import Person
+
+        _, token = _create_admin(api_client, db_session)
+        org = OrgUnit(code="dup-org", name="重复组织", type="station")
+        person = Person(code="DUP1", name="已绑人员", person_type="duty_operator", org_unit=org)
+        db_session.add_all([org, person])
+        db_session.commit()
+        api_client.post(
+            "/api/v1/users",
+            json={"username": "first", "password": "pass", "display_name": "第一个", "person_id": person.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        resp = api_client.post(
+            "/api/v1/users",
+            json={"username": "second", "password": "pass", "display_name": "第二个", "person_id": person.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 409
+
+    def test_update_user_bind_person(self, api_client: TestClient, db_session) -> None:
+        from app.models.organization import OrgUnit
+        from app.models.person import Person
+
+        _, token = _create_admin(api_client, db_session)
+        org = OrgUnit(code="upd-org", name="更新组织", type="station")
+        person = Person(code="UPB1", name="更新绑定", person_type="duty_operator", org_unit=org)
+        db_session.add_all([org, person])
+        db_session.commit()
+        resp = api_client.post(
+            "/api/v1/users",
+            json={"username": "upd1", "password": "pass", "display_name": "更新用户"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        user_id = resp.json()["data"]["id"]
+
+        resp = api_client.put(
+            f"/api/v1/users/{user_id}",
+            json={"person_id": person.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["person_id"] == person.id
+
+    def test_update_user_unbind_person(self, api_client: TestClient, db_session) -> None:
+        from app.models.organization import OrgUnit
+        from app.models.person import Person
+
+        _, token = _create_admin(api_client, db_session)
+        org = OrgUnit(code="unb-org", name="解绑组织", type="station")
+        person = Person(code="UNB1", name="解绑人员", person_type="duty_operator", org_unit=org)
+        db_session.add_all([org, person])
+        db_session.commit()
+        resp = api_client.post(
+            "/api/v1/users",
+            json={"username": "unb1", "password": "pass", "display_name": "解绑用户", "person_id": person.id},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        user_id = resp.json()["data"]["id"]
+
+        resp = api_client.put(
+            f"/api/v1/users/{user_id}",
+            json={"person_id": None},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["person_id"] is None

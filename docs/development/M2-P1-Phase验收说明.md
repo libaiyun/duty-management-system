@@ -145,6 +145,7 @@ User CRUD API 权限：所有 9 个端点均受 `RequirePermission("system:user:
 | **`GET /auth/me` 未返回用户权限列表** | **已修复** | 新增 `permissions: list[str]` 字段，从 `sys_user_role` + `sys_role_permission` + `sys_permission` JOIN 查询 |
 | **前端 permissionStore 默认持有全权限（开发模式）** | **已修复** | 改为空权限初始状态，登录时从 `/auth/me` 同步实际权限 |
 | **前端 auth store 登录后未同步权限** | **已修复** | `authStore.login()` 中调用 `permStore.setPermissions(user.permissions)` |
+| **sys_user.person_id 无法通过 API 绑定** | **已修复** | §8.2 定义 person_id 为 FK 绑定人员，§10.4 self 数据范围依赖此字段。补全 `UserCreateRequest`/`UserUpdateRequest` 增加 person_id、create_user/update_user 校验人员存在与一夫一夫约束、前端 AccountRoleView 增加人员选择下拉与绑定展示、PersonView 绑定按钮传递 context |
 
 ### /auth/me 权限同步实现
 
@@ -165,7 +166,7 @@ Frontend Login Flow:
 
 ```bash
 # 后端
-pytest             # 90 passed, 1 warning
+pytest             # 95 passed, 1 warning
 
 # 前端
 npm run test       # 71 passed (11 test files)
@@ -178,10 +179,10 @@ npm run build      # ✓ built in 4.70s
 
 | 检查项 | 结果 |
 |--------|------|
-| 后端测试 | 90 passed, 0 failed |
+| 后端测试 | 95 passed, 0 failed |
 | 前端测试 | 71 passed, 0 failed |
 | 后端 lint (ruff) | 0 errors |
-| 后端 type-check (mypy) | 0 issues (35 files) |
+| 后端 type-check (mypy) | 0 issues (50 files) |
 | 前端 lint (eslint) | 0 errors |
 | 前端 type-check (vue-tsc) | 0 errors |
 | 前端 build | ✅ |
@@ -195,7 +196,7 @@ npm run build      # ✓ built in 4.70s
 - RBAC 权限模型完整：RequirePermission 依赖在 API 层声明权限，路由守卫在前端拦截。
 - 数据范围解析服务支持 self/room/station/all 四种范围，从直接分配和角色继承双向聚合。
 - 前端登录页、路由守卫、退出登录状态管理完整。
-- 账号角色管理页面支持用户 CRUD、角色 CRUD、权限分配。
+- 账号角色管理页面支持用户 CRUD、角色 CRUD、权限分配、人员绑定。
 - API 统一响应格式、异常处理、分页参数均符合总体设计。
 - 关键操作（登录/登出/密码修改/权限校验）有完整测试覆盖。
 - 本 Phase 范围内的接口联调、异常测试、边界测试、权限测试、性能检查已完成。

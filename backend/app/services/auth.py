@@ -31,11 +31,19 @@ def authenticate_user(db: Session, username: str, password: str) -> SysUser:
     return user
 
 
-def create_user(db: Session, username: str, password: str, display_name: str) -> SysUser:
+def create_user(db: Session, username: str, password: str, display_name: str, person_id: int | None = None) -> SysUser:
+    if person_id is not None:
+        person = db.get(Person, person_id)
+        if person is None:
+            raise NotFoundError(message="绑定的员工不存在")
+        existing = db.scalars(select(SysUser).where(SysUser.person_id == person_id)).first()
+        if existing:
+            raise StateConflictError(message="该员工已绑定账号")
     user = SysUser(
         username=username,
         password_hash=hash_password(password),
         display_name=display_name,
+        person_id=person_id,
     )
     db.add(user)
     db.flush()
@@ -174,7 +182,13 @@ def get_user_detail(db: Session, user_id: int) -> SysUser | None:
     return db.get(SysUser, user_id)
 
 
-def update_user(db: Session, user_id: int, display_name: str | None, status: str | None) -> SysUser:
+def update_user(
+    db: Session, user_id: int,
+    display_name: str | None,
+    status: str | None,
+    person_id: int | None = None,
+    update_person: bool = False,
+) -> SysUser:
     user = db.get(SysUser, user_id)
     if user is None:
         raise NotFoundError(message="用户不存在")
@@ -182,6 +196,16 @@ def update_user(db: Session, user_id: int, display_name: str | None, status: str
         user.display_name = display_name
     if status is not None:
         user.status = status
+    if update_person:
+        if person_id is not None:
+            if db.get(Person, person_id) is None:
+                raise NotFoundError(message="绑定的员工不存在")
+            existing = db.scalars(
+                select(SysUser).where(SysUser.person_id == person_id, SysUser.id != user_id)
+            ).first()
+            if existing:
+                raise StateConflictError(message="该员工已绑定其他账号")
+        user.person_id = person_id
     db.flush()
     return user
 

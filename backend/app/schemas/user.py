@@ -7,11 +7,13 @@ class UserCreateRequest(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=1, max_length=128)
     display_name: str = Field(..., min_length=1, max_length=64)
+    person_id: int | None = None
 
 
 class UserUpdateRequest(BaseModel):
     display_name: str | None = Field(None, min_length=1, max_length=64)
     status: str | None = None
+    person_id: int | None = None
 
 
 class UserRoleAssignRequest(BaseModel):

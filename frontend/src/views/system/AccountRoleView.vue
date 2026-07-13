@@ -11,6 +11,16 @@
           <el-table-column prop="id" label="ID" width="60" />
           <el-table-column prop="username" label="账号" />
           <el-table-column prop="display_name" label="姓名" />
+          <el-table-column label="绑定人员" width="160">
+            <template #default="{ row }">
+              <template v-if="row.person_id != null">
+                <el-tag type="success" size="small" effect="plain">
+                  {{ personName(row.person_id) }}
+                </el-tag>
+              </template>
+              <span v-else style="color: #9ca3af">未绑定</span>
+            </template>
+          </el-table-column>
           <el-table-column prop="status" label="状态" width="80">
             <template #default="{ row }">
               <el-tag :type="row.status === 'enabled' ? 'success' : 'danger'" size="small">
@@ -69,6 +79,22 @@
         </el-form-item>
         <el-form-item label="姓名" prop="display_name">
           <el-input v-model="userForm.display_name" />
+        </el-form-item>
+        <el-form-item label="绑定人员">
+          <el-select
+            v-model="userForm.person_id"
+            placeholder="请选择人员（可选）"
+            style="width: 100%"
+            clearable
+            filterable
+          >
+            <el-option
+              v-for="p in availablePersons"
+              :key="p.id"
+              :label="`${p.name}（${p.code}）`"
+              :value="p.id"
+            />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -145,7 +171,8 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
 import { httpClient } from '@/services/http'
@@ -154,8 +181,15 @@ interface UserItem {
   id: number
   username: string
   display_name: string
+  person_id: number | null
   status: string
   last_login_at: string | null
+}
+
+interface PersonBrief {
+  id: number
+  code: string
+  name: string
 }
 
 interface UserDetail extends UserItem {
@@ -185,6 +219,7 @@ const activeTab = ref('users')
 const users = ref<UserItem[]>([])
 const roles = ref<RoleItem[]>([])
 const permissions = ref<PermItem[]>([])
+const persons = ref<PersonBrief[]>([])
 const userLoading = ref(false)
 const roleLoading = ref(false)
 
@@ -193,7 +228,7 @@ const userDialogVisible = ref(false)
 const editingUser = ref<UserItem | null>(null)
 const userSaving = ref(false)
 const userFormRef = ref<FormInstance>()
-const userForm = reactive({ username: '', password: '', display_name: '' })
+const userForm = reactive({ username: '', password: '', display_name: '', person_id: null as number | null })
 const userRules: FormRules = {
   username: [{ required: true, message: '请输入账号' }],
   password: [{ required: true, message: '请输入密码' }],
@@ -227,6 +262,30 @@ onMounted(() => {
   loadUsers()
   loadRoles()
   loadPermissions()
+  loadPersons().then(() => {
+    const route = useRoute()
+    const bindPersonId = route.query.bindPersonId
+    if (bindPersonId) {
+      openUserDialog(null)
+      userForm.person_id = Number(bindPersonId)
+    }
+  })
+})
+
+function personName(id: number | null): string {
+  if (id == null) return '-'
+  const p = persons.value.find((x) => x.id === id)
+  return p ? `${p.name}（${p.code}）` : '-'
+}
+
+const availablePersons = computed(() => {
+  const boundIds = new Set(
+    users.value.filter((u) => u.person_id != null).map((u) => u.person_id as number)
+  )
+  if (editingUser.value?.person_id) {
+    boundIds.delete(editingUser.value.person_id)
+  }
+  return persons.value.filter((p) => !boundIds.has(p.id))
 })
 
 async function loadUsers() {
@@ -262,6 +321,15 @@ async function loadPermissions() {
   }
 }
 
+async function loadPersons() {
+  try {
+    const resp = await httpClient.get<PersonBrief[]>('/persons')
+    persons.value = resp.data
+  } catch {
+    // ignore
+  }
+}
+
 // ---- User CRUD ----
 
 function openUserDialog(user: UserItem | null) {
@@ -270,6 +338,7 @@ function openUserDialog(user: UserItem | null) {
     userForm.username = user.username
     userForm.display_name = user.display_name
     userForm.password = ''
+    userForm.person_id = user.person_id
   } else {
     resetUserForm()
   }
@@ -280,6 +349,7 @@ function resetUserForm() {
   userForm.username = ''
   userForm.password = ''
   userForm.display_name = ''
+  userForm.person_id = null
   userFormRef.value?.resetFields()
 }
 
@@ -291,6 +361,7 @@ async function saveUser() {
     if (editingUser.value) {
       await httpClient.put(`/users/${editingUser.value.id}`, {
         display_name: userForm.display_name,
+        person_id: userForm.person_id,
       })
       ElMessage.success('编辑成功')
     } else {
@@ -298,6 +369,7 @@ async function saveUser() {
         username: userForm.username,
         password: userForm.password,
         display_name: userForm.display_name,
+        person_id: userForm.person_id,
       })
       ElMessage.success('创建成功')
     }
