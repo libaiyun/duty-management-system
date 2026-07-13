@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { ApiError, HttpClient, NetworkError } from '@/services/http'
+import { ApiError, HttpClient, NetworkError, resolveErrorMessage } from '@/services/http'
 
 type Fetcher = (...args: Parameters<typeof fetch>) => Promise<Response>
 
@@ -261,5 +261,27 @@ describe('HttpClient error handling', () => {
     const client = new HttpClient({ baseUrl: '/api/v1', fetcher: fetcher as Fetcher })
 
     await expect(client.get('fail')).rejects.toThrow('网络连接失败，请检查网络')
+  })
+})
+
+describe('resolveErrorMessage', () => {
+  it('returns ApiError message', () => {
+    const err = new ApiError(409, { code: 'STATE_CONFLICT', message: '日期已存在', trace_id: 't' })
+    expect(resolveErrorMessage(err, '操作失败')).toBe('日期已存在')
+  })
+
+  it('returns NetworkError message', () => {
+    const err = new NetworkError('网络连接失败')
+    expect(resolveErrorMessage(err, '操作失败')).toBe('网络连接失败')
+  })
+
+  it('returns fallback for unknown error shapes', () => {
+    expect(resolveErrorMessage('boom', '操作失败')).toBe('操作失败')
+    expect(resolveErrorMessage(null, '操作失败')).toBe('操作失败')
+    expect(resolveErrorMessage({}, '操作失败')).toBe('操作失败')
+  })
+
+  it('uses message from generic object with message field', () => {
+    expect(resolveErrorMessage({ message: '自定义错误' }, '操作失败')).toBe('自定义错误')
   })
 })

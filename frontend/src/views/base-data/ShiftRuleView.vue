@@ -188,7 +188,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
-import { httpClient } from '@/services/http'
+import { httpClient, resolveErrorMessage } from '@/services/http'
 
 interface OrgUnitItem {
   id: number
@@ -430,7 +430,7 @@ async function saveShift() {
     shiftDialogVisible.value = false
     await loadShiftDefs()
   } catch (err) {
-    ElMessage.error(errorMessage(err, '操作失败'))
+    ElMessage.error(resolveErrorMessage(err, '操作失败'))
   } finally {
     shiftSaving.value = false
   }
@@ -537,7 +537,7 @@ async function saveRule() {
     ruleDialogVisible.value = false
     await loadShiftRules()
   } catch (err) {
-    ElMessage.error(errorMessage(err, '操作失败'))
+    ElMessage.error(resolveErrorMessage(err, '操作失败'))
   } finally {
     ruleSaving.value = false
   }
@@ -554,15 +554,8 @@ async function deleteRule(rule: ShiftRuleData) {
     ElMessage.success('删除成功')
     await loadShiftRules()
   } catch (err) {
-    ElMessage.error(errorMessage(err, '删除失败'))
+    ElMessage.error(resolveErrorMessage(err, '删除失败'))
   }
-}
-
-function errorMessage(err: unknown, fallback: string): string {
-  if (err && typeof err === 'object' && 'message' in err) {
-    return String((err as { message: unknown }).message) || fallback
-  }
-  return fallback
 }
 </script>
 

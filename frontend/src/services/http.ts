@@ -145,3 +145,13 @@ export class HttpClient {
 }
 
 export const httpClient = new HttpClient()
+
+export function resolveErrorMessage(err: unknown, fallback: string): string {
+  if (err instanceof ApiError || err instanceof NetworkError) {
+    return err.message || fallback
+  }
+  if (err && typeof err === 'object' && 'message' in err) {
+    return String((err as { message: unknown }).message) || fallback
+  }
+  return fallback
+}
