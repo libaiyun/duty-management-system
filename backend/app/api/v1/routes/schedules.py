@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends
+from datetime import date
+
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import RequirePermission, get_db, get_page_params
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import BusinessRuleError, NotFoundError
 from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
 from app.models.user import SysUser
 from app.schemas.pagination import PageParams, PageResponse
@@ -14,7 +16,7 @@ from app.schemas.schedule import (
     ScheduleShiftResponse,
 )
 from app.services.auth import resolve_scoped_org_unit_ids
-from app.services.schedule import get_schedule, get_schedule_days, list_schedules
+from app.services.schedule import get_schedule, get_schedule_days, get_schedule_days_by_range, list_schedules
 
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 
@@ -126,11 +128,32 @@ def get_schedule_endpoint(
 @router.get("/{id}/days", response_model=ApiResponse[list[ScheduleDayResponse]])
 def get_schedule_days_endpoint(
     id: int,
+    year: int | None = None,
+    month: int | None = None,
     db: Session = Depends(get_db),
     _perm: None = Depends(RequirePermission("schedule:monthly:view")),
 ) -> ApiResponse[list[ScheduleDayResponse]]:
     schedule = get_schedule(db, id)
     if schedule is None:
         raise NotFoundError(message="排班记录不存在")
-    days = get_schedule_days(db, id)
+    if (year is None) != (month is None):
+        raise BusinessRuleError(message="year 和 month 必须同时传入")
+    days = get_schedule_days(db, id, year=year, month=month)
+    return ok([_build_day_response(d) for d in days])
+
+
+@router.get("/{id}/days/range", response_model=ApiResponse[list[ScheduleDayResponse]])
+def get_schedule_days_range_endpoint(
+    id: int,
+    from_date: date = Query(..., alias="from"),
+    to_date: date = Query(..., alias="to"),
+    db: Session = Depends(get_db),
+    _perm: None = Depends(RequirePermission("schedule:monthly:view")),
+) -> ApiResponse[list[ScheduleDayResponse]]:
+    schedule = get_schedule(db, id)
+    if schedule is None:
+        raise NotFoundError(message="排班记录不存在")
+    if from_date > to_date:
+        raise BusinessRuleError(message="起始日期不能晚于结束日期")
+    days = get_schedule_days_by_range(db, id, from_date=from_date, to_date=to_date)
     return ok([_build_day_response(d) for d in days])

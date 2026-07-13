@@ -403,3 +403,192 @@ class TestScheduleDaysApi:
         resp = api_client.get(f"/api/v1/schedules/{ms.id}/days",
                               headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 403
+
+    def test_get_days_filter_by_month(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T2: 按月过滤日班次明细"""
+        _, token = _create_admin(api_client, db_session)
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session, "early", "早班")
+        mid = _create_shift_def(db_session, "mid", "中班")
+        p1 = _create_person(db_session, org, "P001", "张三")
+        p2 = _create_person(db_session, org, "P002", "李四")
+
+        rule_version = ShiftRuleVersion(
+            rule_id=rule.id, version_no=1, cycle_days=rule.cycle_days,
+            start_date=rule.start_date, persons_per_cell=rule.persons_per_cell,
+            snapshot={"days": []},
+        )
+        db_session.add(rule_version)
+        db_session.flush()
+
+        ms = MonthlySchedule(
+            org_unit_id=org.id, rule_id=rule.id, rule_version_id=rule_version.id,
+            status="draft",
+        )
+        db_session.add(ms)
+        db_session.flush()
+
+        for day_num in range(1, 4):
+            day = ScheduleDay(
+                schedule_id=ms.id,
+                duty_date=date(2026, 7, day_num),
+                weekday=(day_num + 6) % 7,
+            )
+            db_session.add(day)
+            db_session.flush()
+            for sd in [early, mid]:
+                shift = ScheduleShift(
+                    schedule_day_id=day.id, shift_def_id=sd.id,
+                    start_at=datetime(2026, 7, day_num, tzinfo=UTC),
+                    end_at=datetime(2026, 7, day_num, 8, tzinfo=UTC),
+                    status="normal",
+                )
+                db_session.add(shift)
+                db_session.flush()
+                for pos, p in enumerate([p1, p2], 1):
+                    db_session.add(ScheduleShiftPerson(
+                        schedule_shift_id=shift.id, person_id=p.id,
+                        position_no=pos, source_type="auto",
+                    ))
+        db_session.commit()
+
+        resp = api_client.get(
+            f"/api/v1/schedules/{ms.id}/days?year=2026&month=7",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        days = resp.json()["data"]
+        assert len(days) == 3
+
+    def test_get_days_filter_by_month_empty(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T2: 按月过滤 - 无匹配月份"""
+        _, token = _create_admin(api_client, db_session)
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session)
+        p1 = _create_person(db_session, org, "P001", "张三")
+        ms = _build_full_schedule(db_session, org, rule, [early], [p1])
+
+        resp = api_client.get(
+            f"/api/v1/schedules/{ms.id}/days?year=2026&month=8",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"] == []
+
+    def test_get_days_year_without_month(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T2: 仅传 year 不传 month 返回 422"""
+        _, token = _create_admin(api_client, db_session)
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session)
+        p1 = _create_person(db_session, org, "P001", "张三")
+        ms = _build_full_schedule(db_session, org, rule, [early], [p1])
+
+        resp = api_client.get(
+            f"/api/v1/schedules/{ms.id}/days?year=2026",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422
+
+    def test_get_days_month_without_year(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T2: 仅传 month 不传 year 返回 422"""
+        _, token = _create_admin(api_client, db_session)
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session)
+        p1 = _create_person(db_session, org, "P001", "张三")
+        ms = _build_full_schedule(db_session, org, rule, [early], [p1])
+
+        resp = api_client.get(
+            f"/api/v1/schedules/{ms.id}/days?month=7",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422
+
+
+class TestScheduleDaysRangeApi:
+    """M3-P1-T2: 按日期范围查询日班次明细"""
+
+    def test_get_days_range(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session, "early", "早班")
+        mid = _create_shift_def(db_session, "mid", "中班")
+        p1 = _create_person(db_session, org, "P001", "张三")
+        p2 = _create_person(db_session, org, "P002", "李四")
+        ms = _build_full_schedule(db_session, org, rule, [early, mid], [p1, p2])
+
+        resp = api_client.get(
+            f"/api/v1/schedules/{ms.id}/days/range",
+            params={"from": "2026-07-01", "to": "2026-07-02"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        days = resp.json()["data"]
+        assert len(days) == 2
+        assert days[0]["duty_date"] == "2026-07-01"
+        assert days[1]["duty_date"] == "2026-07-02"
+
+    def test_get_days_range_empty(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T2: 日期范围无匹配"""
+        _, token = _create_admin(api_client, db_session)
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session)
+        p1 = _create_person(db_session, org, "P001", "张三")
+        ms = _build_full_schedule(db_session, org, rule, [early], [p1])
+
+        resp = api_client.get(
+            f"/api/v1/schedules/{ms.id}/days/range",
+            params={"from": "2025-01-01", "to": "2025-01-31"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"] == []
+
+    def test_get_days_range_from_after_to(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T2: from > to 返回错误"""
+        _, token = _create_admin(api_client, db_session)
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session)
+        p1 = _create_person(db_session, org, "P001", "张三")
+        ms = _build_full_schedule(db_session, org, rule, [early], [p1])
+
+        resp = api_client.get(
+            f"/api/v1/schedules/{ms.id}/days/range",
+            params={"from": "2026-12-31", "to": "2026-01-01"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 422
+
+    def test_get_days_range_schedule_not_found(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T2: range 端点 404"""
+        _, token = _create_admin(api_client, db_session)
+        resp = api_client.get(
+            "/api/v1/schedules/99999/days/range",
+            params={"from": "2026-07-01", "to": "2026-07-31"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 404
+
+    def test_get_days_range_requires_permission(self, api_client: TestClient, db_session) -> None:
+        """M3-P1-T2: range 端点需要权限"""
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session)
+        p1 = _create_person(db_session, org, "P001", "张三")
+        ms = _build_full_schedule(db_session, org, rule, [early], [p1])
+
+        create_user(db_session, "norange", "pass", "无权限")
+        db_session.commit()
+        token = _login(api_client, db_session, "norange", "pass")
+        resp = api_client.get(
+            f"/api/v1/schedules/{ms.id}/days/range",
+            params={"from": "2026-07-01", "to": "2026-07-31"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 403

@@ -1,4 +1,6 @@
-from sqlalchemy import func, select
+from datetime import date
+
+from sqlalchemy import extract, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
@@ -57,11 +59,45 @@ def get_schedule(db: Session, schedule_id: int) -> MonthlySchedule | None:
     )
 
 
-def get_schedule_days(db: Session, schedule_id: int) -> list[ScheduleDay]:
+def get_schedule_days(
+    db: Session,
+    schedule_id: int,
+    *,
+    year: int | None = None,
+    month: int | None = None,
+) -> list[ScheduleDay]:
+    stmt = (
+        select(ScheduleDay)
+        .where(ScheduleDay.schedule_id == schedule_id)
+    )
+
+    if year is not None and month is not None:
+        stmt = stmt.where(extract("year", ScheduleDay.duty_date) == year)
+        stmt = stmt.where(extract("month", ScheduleDay.duty_date) == month)
+
+    stmt = stmt.options(
+        selectinload(ScheduleDay.shifts).options(
+            selectinload(ScheduleShift.shift_def),
+            selectinload(ScheduleShift.persons).selectinload(ScheduleShiftPerson.person),
+        )
+    ).order_by(ScheduleDay.duty_date)
+
+    return list(db.scalars(stmt).all())
+
+
+def get_schedule_days_by_range(
+    db: Session,
+    schedule_id: int,
+    *,
+    from_date: date,
+    to_date: date,
+) -> list[ScheduleDay]:
     return list(
         db.scalars(
             select(ScheduleDay)
             .where(ScheduleDay.schedule_id == schedule_id)
+            .where(ScheduleDay.duty_date >= from_date)
+            .where(ScheduleDay.duty_date <= to_date)
             .options(
                 selectinload(ScheduleDay.shifts).options(
                     selectinload(ScheduleShift.shift_def),
