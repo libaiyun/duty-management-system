@@ -2,7 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.models.person import Person
-from app.models.user import SysPermission, SysRole
+from app.models.user import SysDataScope, SysPermission, SysRole
 from app.services.auth import create_user
 
 pytestmark = pytest.mark.usefixtures("create_tables")
@@ -21,6 +21,8 @@ def _create_admin(api_client: TestClient, db_session) -> tuple[int, str]:
     role.permissions.append(perm)
     db_session.add_all([perm, role])
     user.roles.append(role)
+    db_session.flush()
+    db_session.add(SysDataScope(user_id=user.id, scope_type="all", org_unit_id=None))
     db_session.commit()
     token = _login(api_client, db_session, "admin", "password123")
     return user.id, token
@@ -115,6 +117,55 @@ class TestPersonApi:
         )
         assert resp.status_code == 404
         assert resp.json()["code"] == "NOT_FOUND"
+
+    def test_create_duplicate_code_returns_409(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        api_client.post(
+            "/api/v1/persons",
+            json={"code": "P100", "name": "甲", "person_type": "duty_operator"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        resp = api_client.post(
+            "/api/v1/persons",
+            json={"code": "P100", "name": "乙", "person_type": "duty_operator"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 409
+        assert resp.json()["code"] == "STATE_CONFLICT"
+
+
+class TestPersonDataScope:
+    def test_room_scope_filters_persons(self, api_client: TestClient, db_session) -> None:
+        from app.models.organization import OrgUnit
+
+        _, admin_token = _create_admin(api_client, db_session)
+        room1 = OrgUnit(code="room-a", name="机房A", type="room")
+        room2 = OrgUnit(code="room-b", name="机房B", type="room")
+        db_session.add_all([room1, room2])
+        db_session.flush()
+        db_session.add_all([
+            Person(code="PA1", name="甲", person_type="duty_operator", org_unit_id=room1.id),
+            Person(code="PB1", name="乙", person_type="duty_operator", org_unit_id=room2.id),
+        ])
+
+        scoped = create_user(db_session, "scoped", "pass123", "范围用户")
+        perm = db_session.query(SysPermission).filter(
+            SysPermission.code == "person:manage:view"
+        ).first()
+        role = SysRole(code="role-scoped", name="scoped")
+        role.permissions.append(perm)
+        db_session.add(role)
+        scoped.roles.append(role)
+        db_session.flush()
+        db_session.add(SysDataScope(user_id=scoped.id, scope_type="room", org_unit_id=room1.id))
+        db_session.commit()
+
+        token = _login(api_client, db_session, "scoped", "pass123")
+        resp = api_client.get("/api/v1/persons", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 200
+        data = resp.json()["data"]
+        assert len(data) == 1
+        assert data[0]["code"] == "PA1"
 
 
 class TestPersonModel:

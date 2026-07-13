@@ -50,6 +50,9 @@
               {{ selectedNode.status === 'enabled' ? '启用' : '停用' }}
             </el-tag>
           </el-descriptions-item>
+          <el-descriptions-item label="负责人">
+            {{ personName(selectedNode.manager_person_id) }}
+          </el-descriptions-item>
         </el-descriptions>
 
         <div class="org-unit-view__detail-actions">
@@ -82,6 +85,22 @@
         </el-form-item>
         <el-form-item label="名称" prop="name">
           <el-input v-model="formData.name" />
+        </el-form-item>
+        <el-form-item label="负责人">
+          <el-select
+            v-model="formData.manager_person_id"
+            placeholder="请选择负责人（可选）"
+            style="width: 100%"
+            clearable
+            filterable
+          >
+            <el-option
+              v-for="p in persons"
+              :key="p.id"
+              :label="`${p.name}（${p.code}）`"
+              :value="p.id"
+            />
+          </el-select>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -117,9 +136,16 @@ interface OrgUnitNode {
   code: string
   name: string
   type: string
+  manager_person_id: number | null
   status: string
   sort_order: number
   children: OrgUnitNode[]
+}
+
+interface PersonBrief {
+  id: number
+  code: string
+  name: string
 }
 
 function typeLabel(type: string): string {
@@ -128,16 +154,29 @@ function typeLabel(type: string): string {
 
 const treeRef = ref<InstanceType<typeof ElTree>>()
 const treeData = ref<OrgUnitNode[]>([])
+const persons = ref<PersonBrief[]>([])
 const filterText = ref('')
 const selectedNode = ref<OrgUnitNode | null>(null)
 const loading = ref(false)
+
+function personName(id: number | null): string {
+  if (id == null) return '-'
+  const p = persons.value.find((x) => x.id === id)
+  return p ? `${p.name}（${p.code}）` : '-'
+}
 
 // Form
 const formVisible = ref(false)
 const editingUnit = ref<OrgUnitNode | null>(null)
 const saving = ref(false)
 const formRef = ref<FormInstance>()
-const formData = ref({ code: '', name: '', type: 'station', parent_id: null as number | null })
+const formData = ref({
+  code: '',
+  name: '',
+  type: 'station',
+  parent_id: null as number | null,
+  manager_person_id: null as number | null,
+})
 const formRules: FormRules = {
   code: [{ required: true, message: '请输入编码' }],
   name: [{ required: true, message: '请输入名称' }],
@@ -158,7 +197,7 @@ function filterNode(value: string, data: OrgUnitNode): boolean {
 }
 
 onMounted(async () => {
-  await loadTree()
+  await Promise.all([loadTree(), loadPersons()])
 })
 
 async function loadTree() {
@@ -173,13 +212,22 @@ async function loadTree() {
   }
 }
 
+async function loadPersons() {
+  try {
+    const resp = await httpClient.get<PersonBrief[]>('/persons')
+    persons.value = resp.data
+  } catch {
+    // 负责人下拉可选，加载失败不阻塞页面
+  }
+}
+
 function onNodeClick(data: OrgUnitNode) {
   selectedNode.value = data
 }
 
 function openCreateDialog(type: string) {
   editingUnit.value = null
-  formData.value = { code: '', name: '', type, parent_id: null }
+  formData.value = { code: '', name: '', type, parent_id: null, manager_person_id: null }
   if (selectedNode.value && selectedNode.value.type === 'station' && type === 'room') {
     formData.value.parent_id = selectedNode.value.id
   }
@@ -189,14 +237,20 @@ function openCreateDialog(type: string) {
 
 function openEditDialog(unit: OrgUnitNode) {
   editingUnit.value = unit
-  formData.value = { code: unit.code, name: unit.name, type: unit.type, parent_id: unit.parent_id }
+  formData.value = {
+    code: unit.code,
+    name: unit.name,
+    type: unit.type,
+    parent_id: unit.parent_id,
+    manager_person_id: unit.manager_person_id,
+  }
   formVisible.value = true
   nextTick(() => formRef.value?.clearValidate())
 }
 
 function resetForm() {
   editingUnit.value = null
-  formData.value = { code: '', name: '', type: 'station', parent_id: null }
+  formData.value = { code: '', name: '', type: 'station', parent_id: null, manager_person_id: null }
   formRef.value?.resetFields()
 }
 
@@ -208,6 +262,7 @@ async function save() {
     if (editingUnit.value) {
       await httpClient.put(`/org-units/${editingUnit.value.id}`, {
         name: formData.value.name,
+        manager_person_id: formData.value.manager_person_id,
       })
       ElMessage.success('编辑成功')
     } else {
@@ -216,6 +271,7 @@ async function save() {
         name: formData.value.name,
         type: formData.value.type,
         parent_id: formData.value.parent_id,
+        manager_person_id: formData.value.manager_person_id,
       })
       ElMessage.success('创建成功')
     }

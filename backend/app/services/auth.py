@@ -122,6 +122,50 @@ def has_global_scope(scopes: list[DataScope]) -> bool:
     return any(s.scope_type == "all" for s in scopes)
 
 
+def _descendant_org_unit_ids(db: Session, root_ids: set[int]) -> set[int]:
+    """返回 root_ids 及其所有后代组织 id（含自身）。"""
+    rows = db.execute(select(OrgUnit.id, OrgUnit.parent_id)).all()
+    children_map: dict[int | None, list[int]] = {}
+    for uid, pid in rows:
+        children_map.setdefault(pid, []).append(uid)
+
+    result: set[int] = set(root_ids)
+    stack = list(root_ids)
+    while stack:
+        current = stack.pop()
+        for child in children_map.get(current, []):
+            if child not in result:
+                result.add(child)
+                stack.append(child)
+    return result
+
+
+def resolve_scoped_org_unit_ids(db: Session, user: SysUser) -> set[int] | None:
+    """计算用户数据范围可见的 org_unit id 集合。
+
+    返回 None 表示全局范围（不过滤）。
+    返回空集合表示无任何可见组织。
+    self 范围按用户绑定人员所属机房处理。
+    """
+    scopes = resolve_user_data_scopes(db, user)
+    if has_global_scope(scopes):
+        return None
+
+    root_ids: set[int] = set()
+    for scope in scopes:
+        if scope.scope_type in ("room", "station") and scope.org_unit_id is not None:
+            root_ids.add(scope.org_unit_id)
+        elif scope.scope_type == "self":
+            if user.person_id is not None:
+                person = db.get(Person, user.person_id)
+                if person is not None and person.org_unit_id is not None:
+                    root_ids.add(person.org_unit_id)
+
+    if not root_ids:
+        return set()
+    return _descendant_org_unit_ids(db, root_ids)
+
+
 def list_users(db: Session) -> list[SysUser]:
     return list(db.scalars(select(SysUser).order_by(SysUser.id)).all())
 
@@ -207,15 +251,32 @@ def list_permissions(db: Session) -> list[SysPermission]:
     return list(db.scalars(select(SysPermission).order_by(SysPermission.id)).all())
 
 
-def list_org_units(db: Session) -> list[OrgUnit]:
-    return list(db.scalars(select(OrgUnit).order_by(OrgUnit.sort_order, OrgUnit.id)).all())
+def list_org_units(db: Session, org_unit_ids: set[int] | None = None) -> list[OrgUnit]:
+    stmt = select(OrgUnit)
+    if org_unit_ids is not None:
+        if not org_unit_ids:
+            return []
+        stmt = stmt.where(OrgUnit.id.in_(org_unit_ids))
+    stmt = stmt.order_by(OrgUnit.sort_order, OrgUnit.id)
+    return list(db.scalars(stmt).all())
 
 
 def create_org_unit(
     db: Session, code: str, name: str, type_: str,
     parent_id: int | None = None, sort_order: int = 0,
+    manager_person_id: int | None = None,
 ) -> OrgUnit:
-    unit = OrgUnit(code=code, name=name, type=type_, parent_id=parent_id, sort_order=sort_order)
+    existing = db.scalars(select(OrgUnit).where(OrgUnit.code == code)).first()
+    if existing:
+        raise StateConflictError(message=f"组织编码 '{code}' 已存在")
+    if parent_id is not None and db.get(OrgUnit, parent_id) is None:
+        raise NotFoundError(message="上级组织不存在")
+    if manager_person_id is not None and db.get(Person, manager_person_id) is None:
+        raise NotFoundError(message="负责人不存在")
+    unit = OrgUnit(
+        code=code, name=name, type=type_, parent_id=parent_id,
+        sort_order=sort_order, manager_person_id=manager_person_id,
+    )
     db.add(unit)
     db.flush()
     return unit
@@ -224,15 +285,26 @@ def create_org_unit(
 def update_org_unit(
     db: Session, unit_id: int,
     parent_id: int | None, name: str | None, status: str | None, sort_order: int | None,
+    manager_person_id: int | None = None, update_manager: bool = False,
 ) -> OrgUnit:
     unit = db.get(OrgUnit, unit_id)
     if unit is None:
         raise NotFoundError(message="组织不存在")
     if parent_id is not None:
+        if db.get(OrgUnit, parent_id) is None:
+            raise NotFoundError(message="上级组织不存在")
+        if parent_id == unit_id:
+            raise StateConflictError(message="上级组织不能是自身")
         unit.parent_id = parent_id
     if name is not None:
         unit.name = name
+    if update_manager:
+        if manager_person_id is not None and db.get(Person, manager_person_id) is None:
+            raise NotFoundError(message="负责人不存在")
+        unit.manager_person_id = manager_person_id
     if status is not None:
+        if status == "disabled" and unit.status != "disabled" and _org_unit_has_active_persons(db, unit_id):
+            raise StateConflictError(message="当前组织存在在职人员，不能停用")
         unit.status = status
     if sort_order is not None:
         unit.sort_order = sort_order
@@ -247,13 +319,35 @@ def get_org_unit_children(db: Session, parent_id: int | None) -> list[OrgUnit]:
 
 
 def check_org_unit_referenced(db: Session, unit_id: int) -> bool:
-    return db.scalar(
+    has_children = db.scalar(
         exists().where(OrgUnit.parent_id == unit_id).select()
     ) or False
+    return bool(has_children) or _org_unit_has_persons(db, unit_id)
 
 
-def list_persons(db: Session) -> list[Person]:
-    return list(db.scalars(select(Person).order_by(Person.id)).all())
+def _org_unit_has_persons(db: Session, unit_id: int) -> bool:
+    return bool(db.scalar(
+        exists().where(Person.org_unit_id == unit_id).select()
+    ))
+
+
+def _org_unit_has_active_persons(db: Session, unit_id: int) -> bool:
+    return bool(db.scalar(
+        exists().where(
+            Person.org_unit_id == unit_id,
+            Person.status == "enabled",
+        ).select()
+    ))
+
+
+def list_persons(db: Session, org_unit_ids: set[int] | None = None) -> list[Person]:
+    stmt = select(Person)
+    if org_unit_ids is not None:
+        if not org_unit_ids:
+            return []
+        stmt = stmt.where(Person.org_unit_id.in_(org_unit_ids))
+    stmt = stmt.order_by(Person.id)
+    return list(db.scalars(stmt).all())
 
 
 def create_person(
@@ -262,6 +356,9 @@ def create_person(
     participate_schedule: bool = False, rotation_order: int | None = None,
     remark: str | None = None,
 ) -> Person:
+    existing = db.scalars(select(Person).where(Person.code == code)).first()
+    if existing:
+        raise StateConflictError(message=f"人员编号 '{code}' 已存在")
     if org_unit_id is not None and db.get(OrgUnit, org_unit_id) is None:
         raise NotFoundError(message="组织不存在")
     p = Person(

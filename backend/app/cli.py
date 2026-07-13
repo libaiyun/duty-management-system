@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.models.user import SysPermission, SysRole
+from app.models.user import SysDataScope, SysPermission, SysRole
 from app.services.auth import create_user
 
 ALL_PERMISSION_CODES = (
@@ -69,6 +69,8 @@ def cmd_create_admin(args: argparse.Namespace) -> None:
         role = _get_or_create_admin_role(db)
         user = create_user(db, args.username, args.password, args.display_name)
         user.roles.append(role)
+        db.flush()
+        db.add(SysDataScope(user_id=user.id, scope_type="all", org_unit_id=None))
         db.commit()
         print(f"Admin user created: id={user.id}, username={user.username}")
     except IntegrityError:

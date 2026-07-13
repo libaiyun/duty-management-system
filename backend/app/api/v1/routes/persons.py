@@ -4,9 +4,15 @@ from sqlalchemy.orm import Session
 from app.api.deps import RequirePermission, get_db
 from app.core.exceptions import NotFoundError
 from app.models.person import Person
+from app.models.user import SysUser
 from app.schemas.person import PersonCreateRequest, PersonResponse, PersonUpdateRequest
 from app.schemas.response import ApiResponse, ok
-from app.services.auth import create_person, list_persons, update_person
+from app.services.auth import (
+    create_person,
+    list_persons,
+    resolve_scoped_org_unit_ids,
+    update_person,
+)
 
 router = APIRouter(prefix="/persons", tags=["persons"])
 
@@ -14,9 +20,10 @@ router = APIRouter(prefix="/persons", tags=["persons"])
 @router.get("", response_model=ApiResponse[list[PersonResponse]])
 def get_persons(
     db: Session = Depends(get_db),
-    _perm: None = Depends(RequirePermission("person:manage:view")),
+    user: SysUser = Depends(RequirePermission("person:manage:view")),
 ) -> ApiResponse[list[PersonResponse]]:
-    persons = list_persons(db)
+    scoped_ids = resolve_scoped_org_unit_ids(db, user)
+    persons = list_persons(db, org_unit_ids=scoped_ids)
     return ok([PersonResponse.model_validate(p) for p in persons])
 
 
