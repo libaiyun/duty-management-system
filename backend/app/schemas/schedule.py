@@ -8,7 +8,6 @@ class ScheduleResponse(BaseModel):
     org_unit_id: int
     org_unit_code: str = ""
     org_unit_name: str = ""
-    year_month: str
     rule_id: int
     rule_code: str = ""
     rule_name: str = ""

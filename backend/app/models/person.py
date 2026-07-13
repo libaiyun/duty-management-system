@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Boolean, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import BaseModel
@@ -15,7 +15,6 @@ class Person(BaseModel):
     person_type: Mapped[str] = mapped_column(String(32), nullable=False)
     phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     participate_schedule: Mapped[bool] = mapped_column(Boolean, default=False)
-    rotation_order: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="enabled")
     remark: Mapped[str | None] = mapped_column(String(500), nullable=True)
 

@@ -3,7 +3,7 @@ from app.models.holiday import HolidayCalendar
 from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
-from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem
+from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
 from app.models.user import SysDataScope, SysPermission, SysRole, SysUser
 
 __all__ = [
@@ -18,6 +18,7 @@ __all__ = [
     "ShiftDef",
     "ShiftRule",
     "ShiftRuleItem",
+    "ShiftRuleVersion",
     "SysDataScope",
     "SysPermission",
     "SysRole",

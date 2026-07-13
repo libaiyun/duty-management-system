@@ -45,10 +45,9 @@
         <el-table :data="shiftRules" v-loading="ruleLoading" stripe>
           <el-table-column prop="code" label="规则编码" width="150" />
           <el-table-column prop="name" label="规则名称" min-width="180" />
-          <el-table-column label="适用台站类型" width="150">
-            <template #default="{ row }">{{ stationTypeLabel(row.station_type) }}</template>
-          </el-table-column>
-          <el-table-column prop="persons_per_shift" label="每班人数" width="100" align="center" />
+          <el-table-column prop="cycle_days" label="循环天数" width="100" align="center" />
+          <el-table-column prop="start_date" label="起始日期" width="120" />
+          <el-table-column prop="persons_per_cell" label="每格人数" width="100" align="center" />
           <el-table-column label="适用机房" min-width="160">
             <template #default="{ row }">{{ orgUnitLabel(row.org_unit_id) || '全部' }}</template>
           </el-table-column>
@@ -59,9 +58,18 @@
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="220" fixed="right">
+          <el-table-column label="操作" width="320" fixed="right">
             <template #default="{ row }">
               <el-button size="small" @click="openRuleDialog(row)">编辑</el-button>
+              <el-button
+                v-if="row.status === 'draft'"
+                size="small"
+                type="success"
+                @click="publishRule(row)"
+                :loading="publishingId === row.id"
+              >
+                发布
+              </el-button>
               <el-button size="small" type="danger" @click="deleteRule(row)">删除</el-button>
             </template>
           </el-table-column>
@@ -103,29 +111,45 @@
     <el-dialog
       v-model="ruleDialogVisible"
       :title="editingRule ? '编辑规则' : '新增规则'"
-      width="720px"
+      width="900px"
       @closed="resetRuleForm"
     >
       <el-form ref="ruleFormRef" :model="ruleForm" :rules="ruleFormRules" label-position="top">
-        <el-form-item label="规则编码" prop="code">
-          <el-input v-model="ruleForm.code" :disabled="!!editingRule" placeholder="小写字母/数字/下划线" />
-        </el-form-item>
-        <el-form-item label="规则名称" prop="name">
-          <el-input v-model="ruleForm.name" />
-        </el-form-item>
-        <el-form-item label="适用台站类型" prop="station_type">
-          <el-select v-model="ruleForm.station_type" style="width: 100%">
-            <el-option
-              v-for="(label, value) in STATION_TYPE_LABELS"
-              :key="value"
-              :label="label"
-              :value="value"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="每班人数" prop="persons_per_shift">
-          <el-input-number v-model="ruleForm.persons_per_shift" :min="1" style="width: 100%" />
-        </el-form-item>
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="规则编码" prop="code">
+              <el-input v-model="ruleForm.code" :disabled="!!editingRule" placeholder="小写字母/数字/下划线" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="规则名称" prop="name">
+              <el-input v-model="ruleForm.name" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-row :gutter="16">
+          <el-col :span="8">
+            <el-form-item label="循环天数 (N)" prop="cycle_days">
+              <el-input-number v-model="ruleForm.cycle_days" :min="1" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="起始日期" prop="start_date">
+              <el-date-picker
+                v-model="ruleForm.start_date"
+                type="date"
+                :disabled-date="disablePastDates"
+                placeholder="只能从明天起"
+                style="width: 100%"
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="每格人数" prop="persons_per_cell">
+              <el-input-number v-model="ruleForm.persons_per_cell" :min="1" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+        </el-row>
         <el-form-item label="适用机房">
           <el-select v-model="ruleForm.org_unit_id" placeholder="不选则适用全部" style="width: 100%" clearable>
             <el-option
@@ -136,49 +160,70 @@
             />
           </el-select>
         </el-form-item>
-        <el-form-item v-if="editingRule" label="状态">
-          <el-select v-model="ruleForm.status" style="width: 100%">
-            <el-option
-              v-for="(label, value) in RULE_STATUS_LABELS"
-              :key="value"
-              :label="label"
-              :value="value"
-            />
-          </el-select>
-        </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="ruleForm.remark" type="textarea" :rows="2" />
         </el-form-item>
 
-        <el-divider content-position="left">轮班序列</el-divider>
-        <div class="shift-rule-view__items">
-          <div v-for="(item, index) in ruleForm.items" :key="index" class="shift-rule-view__item-row">
-            <el-select v-model="item.group_type" placeholder="班组" class="shift-rule-view__item-group">
-              <el-option
-                v-for="(label, value) in GROUP_TYPE_LABELS"
-                :key="value"
-                :label="label"
-                :value="value"
-              />
-            </el-select>
-            <el-input-number v-model="item.sequence_no" :min="0" placeholder="顺序" class="shift-rule-view__item-seq" />
-            <el-select v-model="item.shift_code" placeholder="班次" class="shift-rule-view__item-shift">
-              <el-option
-                v-for="(label, value) in SHIFT_CODE_LABELS"
-                :key="value"
-                :label="label"
-                :value="value"
-              />
-            </el-select>
-            <el-input-number v-model="item.repeat_count" :min="1" placeholder="重复" class="shift-rule-view__item-repeat" />
-            <el-button type="danger" size="small" text @click="removeRuleItem(index)">删除</el-button>
-          </div>
-          <el-button size="small" @click="addRuleItem">+ 添加序列项</el-button>
+        <el-divider content-position="left">
+          排班表格（{{ ruleForm.cycle_days }} 天 × {{ enabledShiftDefs.length }} 班）
+        </el-divider>
+
+        <div v-if="ruleForm.cycle_days > 0" class="shift-rule-view__grid-container">
+          <table class="shift-rule-view__grid-table">
+            <thead>
+              <tr>
+                <th class="shift-rule-view__grid-day-header">天数 / 班次</th>
+                <th
+                  v-for="sd in enabledShiftDefs"
+                  :key="sd.id"
+                  class="shift-rule-view__grid-shift-header"
+                >
+                  <div>{{ sd.name }}</div>
+                  <div class="shift-rule-view__grid-shift-time">{{ sd.start_time }}-{{ sd.end_time }}</div>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="dayNo in ruleForm.cycle_days" :key="dayNo">
+                <td class="shift-rule-view__grid-day-label">
+                  <span class="shift-rule-view__grid-day-no">第 {{ dayNo }} 天</span>
+                  <span class="shift-rule-view__grid-day-date">
+                    {{ computeDayDate(dayNo) }}
+                  </span>
+                </td>
+                <td
+                  v-for="sd in enabledShiftDefs"
+                  :key="sd.id"
+                  class="shift-rule-view__grid-cell"
+                >
+                  <el-select
+                    :model-value="getCellPersons(dayNo, sd.id)"
+                    @update:model-value="(val: number[]) => setCellPersons(dayNo, sd.id, val)"
+                    multiple
+                    filterable
+                    placeholder="选择人员"
+                    style="width: 100%"
+                    :disabled="!ruleForm.org_unit_id"
+                  >
+                    <el-option
+                      v-for="p in availablePersons"
+                      :key="p.id"
+                      :label="p.name"
+                      :value="p.id"
+                    />
+                  </el-select>
+                </td>
+              </tr>
+            </tbody>
+          </table>
         </div>
+        <el-empty v-else description="请设置循环天数" />
       </el-form>
       <template #footer>
         <el-button @click="ruleDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="ruleSaving" @click="saveRule">保存</el-button>
+        <el-button type="primary" :loading="ruleSaving" @click="saveRule">
+          {{ editingRule && editingRule.status === 'published' ? '保存并重新发布' : '保存' }}
+        </el-button>
       </template>
     </el-dialog>
   </section>
@@ -209,11 +254,9 @@ interface ShiftDefItem {
 }
 
 interface ShiftRuleItemData {
-  group_type: string
-  sequence_no: number
-  shift_code: string
-  repeat_count: number
-  remark?: string | null
+  id: number
+  day_no: number
+  cell_persons: Record<string, number[]>
 }
 
 interface ShiftRuleData {
@@ -221,50 +264,38 @@ interface ShiftRuleData {
   org_unit_id: number | null
   code: string
   name: string
-  station_type: string
-  persons_per_shift: number
-  rule_type: string
+  cycle_days: number
+  start_date: string
+  persons_per_cell: number
   status: string
   remark: string | null
+  latest_version_id: number | null
   items: ShiftRuleItemData[]
 }
 
-const STATION_TYPE_LABELS: Record<string, string> = {
-  station_broadcast: '广播发射台',
-  station_satellite: '卫星地球站',
+interface PersonItem {
+  id: number
+  code: string
+  name: string
+  person_type: string
+  org_unit_id: number | null
+  participate_schedule: boolean
+  status: string
 }
 
 const RULE_STATUS_LABELS: Record<string, string> = {
   draft: '草稿',
-  enabled: '启用',
-  disabled: '停用',
+  published: '已发布',
 }
 
 const RULE_STATUS_TAG: Record<string, string> = {
   draft: 'info',
-  enabled: 'success',
-  disabled: 'danger',
-}
-
-const GROUP_TYPE_LABELS: Record<string, string> = {
-  night_early_group: '晚早组',
-  middle_group: '中班组',
-}
-
-const SHIFT_CODE_LABELS: Record<string, string> = {
-  early: '早班',
-  middle: '中班',
-  night: '晚班',
-  rest: '休息',
-}
-
-function stationTypeLabel(type: string): string {
-  return STATION_TYPE_LABELS[type] || type
+  published: 'success',
 }
 
 const activeTab = ref('shift-def')
 
-// ── Org units（用于机房选择/展示）──
+// ── Org units ──
 const orgUnits = ref<OrgUnitItem[]>([])
 
 const orgUnitOptions = computed(() =>
@@ -291,6 +322,22 @@ function orgUnitLabel(id: number | null): string {
 function orgUnitDisplayLabel(unit: OrgUnitItem): string {
   return orgUnitLabel(unit.id) || unit.name
 }
+
+// ── Persons (for grid cell selection) ──
+const persons = ref<PersonItem[]>([])
+
+const availablePersons = computed(() =>
+  persons.value.filter(
+    (p) =>
+      p.participate_schedule &&
+      p.status === 'enabled' &&
+      (!ruleForm.org_unit_id || p.org_unit_id === ruleForm.org_unit_id),
+  ),
+)
+
+const enabledShiftDefs = computed(() =>
+  shiftDefs.value.filter((s) => s.status === 'enabled').sort((a, b) => a.display_order - b.display_order),
+)
 
 // ── 班次定义 ──
 const shiftDefs = ref<ShiftDefItem[]>([])
@@ -323,18 +370,19 @@ const shiftFormRules: FormRules = {
 const shiftRules = ref<ShiftRuleData[]>([])
 const ruleLoading = ref(false)
 const ruleSaving = ref(false)
+const publishingId = ref<number | null>(null)
 const ruleDialogVisible = ref(false)
 const editingRule = ref<ShiftRuleData | null>(null)
 const ruleFormRef = ref<FormInstance>()
 const ruleForm = reactive({
   code: '',
   name: '',
-  station_type: 'station_broadcast',
-  persons_per_shift: 2,
+  cycle_days: 6,
+  start_date: null as Date | null,
+  persons_per_cell: 2,
   org_unit_id: null as number | null,
-  status: 'draft',
   remark: '',
-  items: [] as ShiftRuleItemData[],
+  cellData: {} as Record<number, Record<number, number[]>>,
 })
 const ruleFormRules: FormRules = {
   code: [
@@ -342,12 +390,13 @@ const ruleFormRules: FormRules = {
     { pattern: /^[a-z0-9_]+$/, message: '只能包含小写字母、数字、下划线' },
   ],
   name: [{ required: true, message: '请输入规则名称' }],
-  station_type: [{ required: true, message: '请选择适用台站类型' }],
-  persons_per_shift: [{ required: true, message: '请输入每班人数' }],
+  cycle_days: [{ required: true, message: '请设置循环天数' }],
+  start_date: [{ required: true, message: '请选择起始日期' }],
+  persons_per_cell: [{ required: true, message: '请设置每格人数' }],
 }
 
 onMounted(async () => {
-  await Promise.all([loadOrgUnits(), loadShiftDefs(), loadShiftRules()])
+  await Promise.all([loadOrgUnits(), loadShiftDefs(), loadShiftRules(), loadPersons()])
 })
 
 async function loadOrgUnits() {
@@ -381,6 +430,46 @@ async function loadShiftRules() {
   } finally {
     ruleLoading.value = false
   }
+}
+
+async function loadPersons() {
+  try {
+    const resp = await httpClient.get<PersonItem[]>('/persons')
+    persons.value = resp.data
+  } catch {
+    // persons optional
+  }
+}
+
+function disablePastDates(date: Date): boolean {
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  return date <= today
+}
+
+function computeDayDate(dayNo: number): string {
+  if (!ruleForm.start_date) return ''
+  const d = new Date(ruleForm.start_date)
+  d.setDate(d.getDate() + dayNo - 1)
+  return `${d.getMonth() + 1}月${d.getDate()}日`
+}
+
+function getCellPersons(dayNo: number, shiftDefId: number): number[] {
+  return ruleForm.cellData[dayNo]?.[shiftDefId] ?? []
+}
+
+function setCellPersons(dayNo: number, shiftDefId: number, personIds: number[]) {
+  if (!ruleForm.cellData[dayNo]) {
+    ruleForm.cellData[dayNo] = {}
+  }
+  ruleForm.cellData[dayNo][shiftDefId] = personIds
+}
+
+function formatDate(date: Date): string {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
 }
 
 // ── 班次定义 操作 ──
@@ -455,20 +544,23 @@ function openRuleDialog(rule?: ShiftRuleData) {
   editingRule.value = rule ?? null
   ruleForm.code = rule?.code ?? ''
   ruleForm.name = rule?.name ?? ''
-  ruleForm.station_type = rule?.station_type ?? 'station_broadcast'
-  ruleForm.persons_per_shift = rule?.persons_per_shift ?? 2
+  ruleForm.cycle_days = rule?.cycle_days ?? 6
+  ruleForm.start_date = rule?.start_date ? new Date(rule.start_date) : null
+  ruleForm.persons_per_cell = rule?.persons_per_cell ?? 2
   ruleForm.org_unit_id = rule?.org_unit_id ?? null
-  ruleForm.status = rule?.status ?? 'draft'
   ruleForm.remark = rule?.remark ?? ''
-  ruleForm.items = rule
-    ? rule.items.map((i) => ({
-        group_type: i.group_type,
-        sequence_no: i.sequence_no,
-        shift_code: i.shift_code,
-        repeat_count: i.repeat_count,
-        remark: i.remark ?? null,
-      }))
-    : []
+
+  // Initialize cell data from existing items
+  ruleForm.cellData = {}
+  if (rule?.items) {
+    for (const item of rule.items) {
+      ruleForm.cellData[item.day_no] = {}
+      for (const [shiftDefId, personIds] of Object.entries(item.cell_persons)) {
+        ruleForm.cellData[item.day_no][Number(shiftDefId)] = personIds
+      }
+    }
+  }
+
   ruleDialogVisible.value = true
 }
 
@@ -476,61 +568,61 @@ function resetRuleForm() {
   editingRule.value = null
   ruleForm.code = ''
   ruleForm.name = ''
-  ruleForm.station_type = 'station_broadcast'
-  ruleForm.persons_per_shift = 2
+  ruleForm.cycle_days = 6
+  ruleForm.start_date = null
+  ruleForm.persons_per_cell = 2
   ruleForm.org_unit_id = null
-  ruleForm.status = 'draft'
   ruleForm.remark = ''
-  ruleForm.items = []
+  ruleForm.cellData = {}
   ruleFormRef.value?.resetFields()
 }
 
-function addRuleItem() {
-  ruleForm.items.push({
-    group_type: 'night_early_group',
-    sequence_no: ruleForm.items.length + 1,
-    shift_code: 'early',
-    repeat_count: 1,
-    remark: null,
-  })
-}
-
-function removeRuleItem(index: number) {
-  ruleForm.items.splice(index, 1)
+function buildDaysPayload(): Array<{ day_no: number; cells: Array<{ shift_def_id: number; person_ids: number[] }> }> {
+  const days = []
+  for (let dayNo = 1; dayNo <= ruleForm.cycle_days; dayNo++) {
+    const cells = []
+    for (const sd of enabledShiftDefs.value) {
+      cells.push({
+        shift_def_id: sd.id,
+        person_ids: getCellPersons(dayNo, sd.id),
+      })
+    }
+    days.push({ day_no: dayNo, cells })
+  }
+  return days
 }
 
 async function saveRule() {
   const valid = await ruleFormRef.value?.validate().catch(() => false)
   if (!valid) return
+
+  const days = buildDaysPayload()
+  const startDate = ruleForm.start_date ? formatDate(ruleForm.start_date) : ''
+  const isRepublish = editingRule.value?.status === 'published'
+
   ruleSaving.value = true
   try {
-    const items = ruleForm.items.map((i) => ({
-      group_type: i.group_type,
-      sequence_no: i.sequence_no,
-      shift_code: i.shift_code,
-      repeat_count: i.repeat_count,
-      remark: i.remark || null,
-    }))
     if (editingRule.value) {
       await httpClient.put(`/shift-rules/${editingRule.value.id}`, {
         name: ruleForm.name,
-        station_type: ruleForm.station_type,
-        persons_per_shift: ruleForm.persons_per_shift,
+        cycle_days: ruleForm.cycle_days,
+        start_date: startDate,
+        persons_per_cell: ruleForm.persons_per_cell,
         org_unit_id: ruleForm.org_unit_id,
-        status: ruleForm.status,
         remark: ruleForm.remark || null,
-        items,
+        days,
       })
-      ElMessage.success('编辑成功')
+      ElMessage.success(isRepublish ? '保存并重新发布成功' : '编辑成功')
     } else {
       await httpClient.post('/shift-rules', {
         code: ruleForm.code,
         name: ruleForm.name,
-        station_type: ruleForm.station_type,
-        persons_per_shift: ruleForm.persons_per_shift,
+        cycle_days: ruleForm.cycle_days,
+        start_date: startDate,
+        persons_per_cell: ruleForm.persons_per_cell,
         org_unit_id: ruleForm.org_unit_id,
         remark: ruleForm.remark || null,
-        items,
+        days,
       })
       ElMessage.success('创建成功')
     }
@@ -540,6 +632,24 @@ async function saveRule() {
     ElMessage.error(resolveErrorMessage(err, '操作失败'))
   } finally {
     ruleSaving.value = false
+  }
+}
+
+async function publishRule(rule: ShiftRuleData) {
+  try {
+    await ElMessageBox.confirm('发布后规则立即生效，排班将自动生成。确认发布？', '发布确认')
+  } catch {
+    return
+  }
+  publishingId.value = rule.id
+  try {
+    await httpClient.post(`/shift-rules/${rule.id}/publish`)
+    ElMessage.success('规则已发布')
+    await loadShiftRules()
+  } catch (err) {
+    ElMessage.error(resolveErrorMessage(err, '发布失败'))
+  } finally {
+    publishingId.value = null
   }
 }
 
@@ -570,28 +680,60 @@ async function deleteRule(rule: ShiftRuleData) {
   margin-bottom: 16px;
 }
 
-.shift-rule-view__items {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.shift-rule-view__grid-container {
+  overflow-x: auto;
+  max-height: 500px;
+  overflow-y: auto;
 }
 
-.shift-rule-view__item-row {
-  display: flex;
-  gap: 8px;
-  align-items: center;
+.shift-rule-view__grid-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 13px;
 }
 
-.shift-rule-view__item-group {
-  width: 130px;
+.shift-rule-view__grid-table th,
+.shift-rule-view__grid-table td {
+  border: 1px solid #dcdfe6;
+  padding: 8px;
+  text-align: center;
+  vertical-align: top;
+  min-width: 120px;
 }
 
-.shift-rule-view__item-shift {
-  width: 110px;
+.shift-rule-view__grid-day-header {
+  background: #f5f7fa;
+  font-weight: 600;
+  min-width: 100px;
 }
 
-.shift-rule-view__item-seq,
-.shift-rule-view__item-repeat {
-  width: 110px;
+.shift-rule-view__grid-shift-header {
+  background: #f5f7fa;
+  font-weight: 600;
+}
+
+.shift-rule-view__grid-shift-time {
+  font-size: 11px;
+  color: #909399;
+  font-weight: normal;
+}
+
+.shift-rule-view__grid-day-label {
+  background: #fafafa;
+  font-weight: 500;
+}
+
+.shift-rule-view__grid-day-no {
+  display: block;
+}
+
+.shift-rule-view__grid-day-date {
+  display: block;
+  font-size: 11px;
+  color: #909399;
+}
+
+.shift-rule-view__grid-cell {
+  min-width: 180px;
 }
 </style>

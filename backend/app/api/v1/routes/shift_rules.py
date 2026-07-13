@@ -6,14 +6,19 @@ from app.core.exceptions import NotFoundError
 from app.schemas.response import ApiResponse, ok
 from app.schemas.shift import (
     ShiftRuleCreateRequest,
+    ShiftRuleItemResponse,
+    ShiftRulePublishResponse,
     ShiftRuleResponse,
     ShiftRuleUpdateRequest,
+    ShiftRuleVersionResponse,
 )
 from app.services.auth import (
     create_shift_rule,
     delete_shift_rule,
+    get_rule_latest_items,
     get_shift_rule,
     list_shift_rules,
+    publish_shift_rule,
     update_shift_rule,
 )
 
@@ -26,7 +31,13 @@ def get_shift_rules(
     _perm: None = Depends(RequirePermission("shift:rule:view")),
 ) -> ApiResponse[list[ShiftRuleResponse]]:
     rules = list_shift_rules(db)
-    return ok([ShiftRuleResponse.model_validate(r) for r in rules])
+    result = []
+    for r in rules:
+        resp = ShiftRuleResponse.model_validate(r)
+        latest = get_rule_latest_items(db, int(r.id))  # type: ignore[arg-type]
+        resp.items = [ShiftRuleItemResponse.model_validate(i) for i in latest]
+        result.append(resp)
+    return ok(result)
 
 
 @router.post("", response_model=ApiResponse[ShiftRuleResponse])
@@ -36,15 +47,19 @@ def create_shift_rule_endpoint(
     _perm: None = Depends(RequirePermission("shift:rule:view")),
 ) -> ApiResponse[ShiftRuleResponse]:
     rule = create_shift_rule(
-        db, body.code, body.name, body.station_type,
-        persons_per_shift=body.persons_per_shift,
-        rule_type=body.rule_type,
+        db, body.code, body.name,
+        cycle_days=body.cycle_days,
+        start_date=body.start_date.isoformat(),
+        persons_per_cell=body.persons_per_cell,
         org_unit_id=body.org_unit_id,
         remark=body.remark,
-        items=[item.model_dump() for item in body.items],
+        days=[d.model_dump() for d in body.days],
     )
     db.commit()
-    return ok(ShiftRuleResponse.model_validate(rule))
+    resp = ShiftRuleResponse.model_validate(rule)
+    items = get_rule_latest_items(db, int(rule.id))  # type: ignore[arg-type]
+    resp.items = [ShiftRuleItemResponse.model_validate(i) for i in items]
+    return ok(resp)
 
 
 @router.get("/{rule_id}", response_model=ApiResponse[ShiftRuleResponse])
@@ -56,7 +71,10 @@ def get_shift_rule_endpoint(
     rule = get_shift_rule(db, rule_id)
     if rule is None:
         raise NotFoundError(message="排班规则不存在")
-    return ok(ShiftRuleResponse.model_validate(rule))
+    resp = ShiftRuleResponse.model_validate(rule)
+    items = get_rule_latest_items(db, rule_id)
+    resp.items = [ShiftRuleItemResponse.model_validate(i) for i in items]
+    return ok(resp)
 
 
 @router.put("/{rule_id}", response_model=ApiResponse[ShiftRuleResponse])
@@ -69,16 +87,18 @@ def update_shift_rule_endpoint(
     rule = update_shift_rule(
         db, rule_id,
         name=body.name,
-        station_type=body.station_type,
-        persons_per_shift=body.persons_per_shift,
-        rule_type=body.rule_type,
-        status=body.status,
+        cycle_days=body.cycle_days,
+        start_date=body.start_date.isoformat() if body.start_date else None,
+        persons_per_cell=body.persons_per_cell,
         org_unit_id=body.org_unit_id,
         remark=body.remark,
-        items=[item.model_dump() for item in body.items] if body.items is not None else None,
+        days=[d.model_dump() for d in body.days] if body.days is not None else None,
     )
     db.commit()
-    return ok(ShiftRuleResponse.model_validate(rule))
+    resp = ShiftRuleResponse.model_validate(rule)
+    items = get_rule_latest_items(db, rule_id)
+    resp.items = [ShiftRuleItemResponse.model_validate(i) for i in items]
+    return ok(resp)
 
 
 @router.delete("/{rule_id}", response_model=ApiResponse[None])
@@ -90,3 +110,35 @@ def delete_shift_rule_endpoint(
     delete_shift_rule(db, rule_id)
     db.commit()
     return ok(message="删除成功")
+
+
+@router.post("/{rule_id}/publish", response_model=ApiResponse[ShiftRulePublishResponse])
+def publish_shift_rule_endpoint(
+    rule_id: int,
+    db: Session = Depends(get_db),
+    _perm: None = Depends(RequirePermission("shift:rule:view")),
+) -> ApiResponse[ShiftRulePublishResponse]:
+    rule = publish_shift_rule(db, rule_id)
+    db.commit()
+    return ok(ShiftRulePublishResponse(
+        id=int(rule.id),  # type: ignore[arg-type]
+        status=rule.status,
+        message="规则已发布，排班生成中",
+    ))
+
+
+@router.get("/{rule_id}/versions", response_model=ApiResponse[list[ShiftRuleVersionResponse]])
+def get_rule_versions(
+    rule_id: int,
+    db: Session = Depends(get_db),
+    _perm: None = Depends(RequirePermission("shift:rule:view")),
+) -> ApiResponse[list[ShiftRuleVersionResponse]]:
+    from app.models.shift import ShiftRuleVersion
+    from sqlalchemy import select
+
+    versions = list(db.scalars(
+        select(ShiftRuleVersion)
+        .where(ShiftRuleVersion.rule_id == rule_id)
+        .order_by(ShiftRuleVersion.version_no.desc())
+    ).all())
+    return ok([ShiftRuleVersionResponse.model_validate(v) for v in versions])

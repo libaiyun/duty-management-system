@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import exists, inspect, select, text
 from sqlalchemy.orm import Session
@@ -14,9 +15,8 @@ from app.core.security import (
 )
 from app.models.organization import OrgUnit
 from app.models.person import Person
-from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem
+from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
 from app.models.user import SysDataScope, SysPermission, SysRole, SysUser, sys_role_permission, sys_user_role
-
 
 def authenticate_user(db: Session, username: str, password: str) -> SysUser:
     user = db.scalar(select(SysUser).where(SysUser.username == username))
@@ -364,12 +364,24 @@ def _org_unit_has_active_persons(db: Session, unit_id: int) -> bool:
     ))
 
 
-def list_persons(db: Session, org_unit_ids: set[int] | None = None) -> list[Person]:
+def list_persons(
+    db: Session,
+    org_unit_ids: set[int] | None = None,
+    participate_schedule: bool | None = None,
+    org_unit_id: int | None = None,
+    person_type: str | None = None,
+) -> list[Person]:
     stmt = select(Person)
     if org_unit_ids is not None:
         if not org_unit_ids:
             return []
         stmt = stmt.where(Person.org_unit_id.in_(org_unit_ids))
+    if org_unit_id is not None:
+        stmt = stmt.where(Person.org_unit_id == org_unit_id)
+    if participate_schedule is not None:
+        stmt = stmt.where(Person.participate_schedule == participate_schedule)
+    if person_type is not None:
+        stmt = stmt.where(Person.person_type == person_type)
     stmt = stmt.order_by(Person.id)
     return list(db.scalars(stmt).all())
 
@@ -377,7 +389,7 @@ def list_persons(db: Session, org_unit_ids: set[int] | None = None) -> list[Pers
 def create_person(
     db: Session, code: str, name: str, person_type: str,
     org_unit_id: int | None = None, phone: str | None = None,
-    participate_schedule: bool = False, rotation_order: int | None = None,
+    participate_schedule: bool = False,
     remark: str | None = None,
 ) -> Person:
     existing = db.scalars(select(Person).where(Person.code == code)).first()
@@ -389,7 +401,7 @@ def create_person(
         code=code, name=name, person_type=person_type,
         org_unit_id=org_unit_id, phone=phone,
         participate_schedule=participate_schedule,
-        rotation_order=rotation_order, remark=remark,
+        remark=remark,
     )
     db.add(p)
     db.flush()
@@ -402,7 +414,6 @@ def update_person(
     name: str | None = None,
     phone: str | None = None,
     participate_schedule: bool | None = None,
-    rotation_order: int | None = None,
     status: str | None = None,
     remark: str | None = None,
 ) -> Person:
@@ -419,8 +430,6 @@ def update_person(
         p.phone = phone
     if participate_schedule is not None:
         p.participate_schedule = participate_schedule
-    if rotation_order is not None:
-        p.rotation_order = rotation_order
     if status is not None:
         p.status = status
     if remark is not None:
@@ -512,6 +521,174 @@ def update_shift_def(
     return sd
 
 
+def _validate_start_date(start_date_str: str) -> None:
+    try:
+        sd = date.fromisoformat(start_date_str)
+    except (ValueError, TypeError):
+        raise BusinessRuleError(message=f"起始日期格式无效: {start_date_str}")
+    tomorrow = date.today() + timedelta(days=1)
+    if sd < tomorrow:
+        raise BusinessRuleError(message=f"起始日期必须从明天（{tomorrow.isoformat()}）起，不能是过去日期")
+
+
+def _validate_cells(
+    db: Session, rule: ShiftRule, days: list[dict],
+) -> None:
+    enabled_defs = list(db.scalars(
+        select(ShiftDef).where(ShiftDef.status == "enabled").order_by(ShiftDef.display_order)
+    ).all())
+    expected_def_ids = {sd.id for sd in enabled_defs}
+
+    if not days:
+        return
+
+    persons_needed = rule.persons_per_cell
+    day_nos_seen = set()
+    for day in days:
+        day_no = day.get("day_no")
+        if day_no in day_nos_seen:
+            raise BusinessRuleError(message=f"第 {day_no} 天重复出现")
+        day_nos_seen.add(day_no)
+
+        cells = day.get("cells", [])
+        cell_shift_ids = set()
+        for cell in cells:
+            sid = cell.get("shift_def_id")
+            cell_shift_ids.add(sid)
+            pids = cell.get("person_ids", [])
+            if len(pids) != persons_needed:
+                raise BusinessRuleError(
+                    message=f"第 {day_no} 天班次 {sid} 需要 {persons_needed} 人，当前 {len(pids)} 人",
+                )
+            if rule.org_unit_id:
+                for pid in pids:
+                    person = db.get(Person, pid)
+                    if not person or person.org_unit_id != rule.org_unit_id:
+                        raise BusinessRuleError(
+                            message=f"第 {day_no} 天班次 {sid} 的人员 {pid} 不属于当前机房",
+                        )
+
+        missing = expected_def_ids - cell_shift_ids
+        if missing:
+            raise BusinessRuleError(
+                message=f"第 {day_no} 天缺少班次: {sorted(missing)}",
+            )
+
+    expected_days = set(range(1, rule.cycle_days + 1))
+    missing_days = expected_days - day_nos_seen
+    if missing_days:
+        raise BusinessRuleError(
+            message=f"缺少第 {'、'.join(str(d) for d in sorted(missing_days))} 天的排班数据",
+        )
+
+
+def _generate_schedule_from_rule(
+    db: Session, rule: ShiftRule, version: ShiftRuleVersion,
+) -> int:
+    from app.models.schedule import MonthlySchedule as _MS
+    from app.models.schedule import ScheduleDay as _SDay
+    from app.models.schedule import ScheduleShift as _SShift
+    from app.models.schedule import ScheduleShiftPerson as _SSP
+
+    if rule.org_unit_id is None:
+        return 0
+
+    existing = db.scalars(
+        select(_MS).where(_MS.org_unit_id == rule.org_unit_id)
+    ).first()
+    ms = existing or _MS(
+        org_unit_id=rule.org_unit_id,  # type: ignore[arg-type]
+        rule_id=int(rule.id),  # type: ignore[arg-type]
+        rule_version_id=int(version.id),  # type: ignore[arg-type]
+        status="draft",
+        generated_at=datetime.now(),
+    )
+    if existing:
+        ms.rule_version_id = int(version.id)  # type: ignore[arg-type]
+        ms.generated_at = datetime.now()
+
+    db.add(ms)
+    db.flush()
+
+    items = list(db.scalars(
+        select(ShiftRuleItem)
+        .where(ShiftRuleItem.version_id == int(version.id))  # type: ignore[arg-type]
+        .order_by(ShiftRuleItem.day_no)
+    ).all())
+
+    if not items:
+        return 0
+
+    sd = date.fromisoformat(rule.start_date)
+    day_count = 0
+    tomorrow = date.today() + timedelta(days=1)
+    end_date = max(sd, tomorrow) + timedelta(days=365)
+
+    current_date = sd
+    while current_date <= end_date:
+        cycle_index = (current_date - sd).days % rule.cycle_days
+        item = items[cycle_index]
+
+        existing_day = db.scalars(
+            select(_SDay).where(
+                _SDay.schedule_id == int(ms.id),  # type: ignore[arg-type]
+                _SDay.duty_date == current_date,
+            )
+        ).first()
+        if existing_day:
+            if current_date < tomorrow:
+                current_date += timedelta(days=1)
+                continue
+            db.delete(existing_day)
+
+        sday = _SDay(
+            schedule_id=int(ms.id),  # type: ignore[arg-type]
+            duty_date=current_date,
+            weekday=current_date.weekday(),
+            is_legal_holiday=False,
+        )
+        db.add(sday)
+        db.flush()
+
+        for shift_def_id_str, person_ids in item.cell_persons.items():
+            shift_def_id = int(shift_def_id_str)
+            shift_def = db.get(ShiftDef, shift_def_id)
+            if not shift_def:
+                continue
+
+            shift_start = datetime.combine(
+                current_date,
+                datetime.strptime(shift_def.start_time, "%H:%M").time(),
+            )
+            shift_end = datetime.combine(
+                current_date,
+                datetime.strptime(shift_def.end_time, "%H:%M").time(),
+            )
+
+            ss = _SShift(
+                schedule_day_id=int(sday.id),  # type: ignore[arg-type]
+                shift_def_id=shift_def_id,
+                start_at=shift_start,
+                end_at=shift_end,
+                status="normal",
+            )
+            db.add(ss)
+            db.flush()
+
+            for pos, pid in enumerate(person_ids, 1):
+                db.add(_SSP(
+                    schedule_shift_id=int(ss.id),  # type: ignore[arg-type]
+                    person_id=pid,
+                    position_no=pos,
+                    source_type="auto",
+                ))
+
+        day_count += 1
+        current_date += timedelta(days=1)
+
+    return day_count
+
+
 def list_shift_rules(db: Session) -> list[ShiftRule]:
     return list(db.scalars(select(ShiftRule).order_by(ShiftRule.id)).all())
 
@@ -520,44 +697,80 @@ def get_shift_rule(db: Session, rule_id: int) -> ShiftRule | None:
     return db.get(ShiftRule, rule_id)
 
 
-def _set_rule_items(rule: ShiftRule, items: list[dict]) -> None:
-    for item in sorted(items, key=lambda i: i.get("sequence_no", 0)):
-        rule.items.append(ShiftRuleItem(
-            group_type=item["group_type"],
-            sequence_no=item.get("sequence_no", 0),
-            shift_code=item["shift_code"],
-            repeat_count=item.get("repeat_count", 1),
-            remark=item.get("remark"),
+def _get_next_version_no(db: Session, rule_id: int) -> int:
+    max_v = db.scalar(
+        select(ShiftRuleVersion.version_no)
+        .where(ShiftRuleVersion.rule_id == rule_id)
+        .order_by(ShiftRuleVersion.version_no.desc())
+        .limit(1),
+    )
+    return (max_v or 0) + 1
+
+
+def _build_cell_persons(cells: list[dict]) -> dict:
+    result: dict = {}
+    for cell in cells:
+        result[str(cell["shift_def_id"])] = cell["person_ids"]
+    return result
+
+
+def _create_rule_version(
+    db: Session, rule: ShiftRule, days: list[dict], status: str = "draft",
+) -> ShiftRuleVersion:
+    version_no = _get_next_version_no(db, int(rule.id))  # type: ignore[arg-type]
+    v = ShiftRuleVersion(
+        rule_id=int(rule.id),  # type: ignore[arg-type]
+        version_no=version_no,
+        cycle_days=rule.cycle_days,
+        start_date=rule.start_date,
+        persons_per_cell=rule.persons_per_cell,
+        status=status,
+    )
+    snapshot_days = []
+    for day in sorted(days, key=lambda d: d["day_no"]):
+        cells_dict = _build_cell_persons(day.get("cells", []))
+        v.items.append(ShiftRuleItem(
+            day_no=day["day_no"],
+            cell_persons=cells_dict,
         ))
+        snapshot_days.append({"day_no": day["day_no"], "cells": cells_dict})
+    v.snapshot = {"cycle_days": rule.cycle_days, "start_date": rule.start_date, "days": snapshot_days}
+    db.add(v)
+    db.flush()
+    return v
 
 
 def create_shift_rule(
-    db: Session, code: str, name: str, station_type: str,
-    persons_per_shift: int = 2,
-    rule_type: str = "broadcast_fixed",
+    db: Session, code: str, name: str,
+    cycle_days: int = 6,
+    start_date: str = "",
+    persons_per_cell: int = 2,
     org_unit_id: int | None = None,
     remark: str | None = None,
-    items: list[dict] | None = None,
+    days: list[dict] | None = None,
 ) -> ShiftRule:
     existing = db.scalars(select(ShiftRule).where(ShiftRule.code == code)).first()
     if existing:
         raise StateConflictError(message=f"规则编码 '{code}' 已存在")
     if org_unit_id is not None and db.get(OrgUnit, org_unit_id) is None:
         raise NotFoundError(message="组织不存在")
+    if start_date:
+        _validate_start_date(start_date)
     rule = ShiftRule(
-        code=code, name=name, station_type=station_type,
-        persons_per_shift=persons_per_shift, rule_type=rule_type,
+        code=code, name=name,
+        cycle_days=cycle_days, start_date=start_date,
+        persons_per_cell=persons_per_cell,
         org_unit_id=org_unit_id, remark=remark,
     )
-    _set_rule_items(rule, items or [])
     db.add(rule)
     db.flush()
+    if days:
+        _validate_cells(db, rule, days)
+        _create_rule_version(db, rule, days, status="draft")
     return rule
 
 
 def _rule_is_referenced(db: Session, rule_id: int) -> bool:
-    # 排班表（monthly_schedule）在 M3 引入。此处做前向兼容检查：
-    # 若排班表已存在且引用了该规则，则视为被引用，不允许删除。
     bind = db.get_bind()
     inspector = inspect(bind)
     if not inspector.has_table("monthly_schedule"):
@@ -572,13 +785,12 @@ def _rule_is_referenced(db: Session, rule_id: int) -> bool:
 def update_shift_rule(
     db: Session, rule_id: int,
     name: str | None = None,
-    station_type: str | None = None,
-    persons_per_shift: int | None = None,
-    rule_type: str | None = None,
-    status: str | None = None,
+    cycle_days: int | None = None,
+    start_date: str | None = None,
+    persons_per_cell: int | None = None,
     org_unit_id: int | None = None,
     remark: str | None = None,
-    items: list[dict] | None = None,
+    days: list[dict] | None = None,
 ) -> ShiftRule:
     rule = db.get(ShiftRule, rule_id)
     if rule is None:
@@ -589,20 +801,21 @@ def update_shift_rule(
         rule.org_unit_id = org_unit_id
     if name is not None:
         rule.name = name
-    if station_type is not None:
-        rule.station_type = station_type
-    if persons_per_shift is not None:
-        rule.persons_per_shift = persons_per_shift
-    if rule_type is not None:
-        rule.rule_type = rule_type
-    if status is not None:
-        rule.status = status
+    if cycle_days is not None:
+        rule.cycle_days = cycle_days
+    if start_date is not None:
+        rule.start_date = start_date
+    if persons_per_cell is not None:
+        rule.persons_per_cell = persons_per_cell
     if remark is not None:
         rule.remark = remark
-    if items is not None:
-        rule.items.clear()
-        db.flush()
-        _set_rule_items(rule, items)
+    if days is not None:
+        if start_date is not None:
+            _validate_start_date(rule.start_date)
+        else:
+            _validate_start_date(rule.start_date)
+        _validate_cells(db, rule, days)
+        _create_rule_version(db, rule, days, status="draft")
     db.flush()
     return rule
 
@@ -615,3 +828,40 @@ def delete_shift_rule(db: Session, rule_id: int) -> None:
         raise StateConflictError(message="规则已被排班引用，不能删除")
     db.delete(rule)
     db.flush()
+
+
+def publish_shift_rule(db: Session, rule_id: int) -> ShiftRule:
+    rule = db.get(ShiftRule, rule_id)
+    if rule is None:
+        raise NotFoundError(message="排班规则不存在")
+    latest_version = db.scalars(
+        select(ShiftRuleVersion)
+        .where(ShiftRuleVersion.rule_id == rule_id)
+        .order_by(ShiftRuleVersion.version_no.desc())
+        .limit(1)
+    ).first()
+    if latest_version is None:
+        raise BusinessRuleError(message="规则没有保存版本，请先保存")
+    if latest_version.status != "draft":
+        raise StateConflictError(message="当前版本已发布，请先修改再重新发布")
+    latest_version.status = "published"
+    rule.status = "published"
+    db.flush()
+    _generate_schedule_from_rule(db, rule, latest_version)
+    return rule
+
+
+def get_rule_latest_items(db: Session, rule_id: int) -> list[ShiftRuleItem]:
+    latest_version = db.scalars(
+        select(ShiftRuleVersion)
+        .where(ShiftRuleVersion.rule_id == rule_id)
+        .order_by(ShiftRuleVersion.version_no.desc())
+        .limit(1)
+    ).first()
+    if latest_version is None:
+        return []
+    return list(db.scalars(
+        select(ShiftRuleItem)
+        .where(ShiftRuleItem.version_id == int(latest_version.id))  # type: ignore[arg-type]
+        .order_by(ShiftRuleItem.day_no)
+    ).all())

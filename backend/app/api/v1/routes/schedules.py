@@ -38,7 +38,6 @@ def _build_schedule_response(schedule: MonthlySchedule) -> ScheduleResponse:
         org_unit_id=schedule.org_unit_id,
         org_unit_code=org.code if org else "",
         org_unit_name=org.name if org else "",
-        year_month=schedule.year_month,
         rule_id=schedule.rule_id,
         rule_code=rule.code if rule else "",
         rule_name=rule.name if rule else "",
@@ -95,7 +94,6 @@ def _build_day_response(day: ScheduleDay) -> ScheduleDayResponse:
 def list_schedules_endpoint(
     paging: PageParams = Depends(get_page_params),
     org_unit_id: int | None = None,
-    year_month: str | None = None,
     status: str | None = None,
     db: Session = Depends(get_db),
     user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
@@ -105,7 +103,6 @@ def list_schedules_endpoint(
         db,
         org_unit_ids=scoped_ids,
         org_unit_id=org_unit_id,
-        year_month=year_month,
         status=status,
         offset=paging.offset,
         limit=paging.page_size,

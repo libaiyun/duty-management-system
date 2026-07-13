@@ -9,7 +9,6 @@ def list_schedules(
     *,
     org_unit_ids: set[int] | None = None,
     org_unit_id: int | None = None,
-    year_month: str | None = None,
     status: str | None = None,
     offset: int = 0,
     limit: int = 20,
@@ -25,8 +24,6 @@ def list_schedules(
         if org_unit_ids is not None and org_unit_id not in org_unit_ids:
             return [], 0
         base_stmt = base_stmt.where(MonthlySchedule.org_unit_id == org_unit_id)
-    if year_month is not None:
-        base_stmt = base_stmt.where(MonthlySchedule.year_month == year_month)
     if status is not None:
         base_stmt = base_stmt.where(MonthlySchedule.status == status)
 
@@ -40,7 +37,7 @@ def list_schedules(
         selectinload(MonthlySchedule.days).options(
             selectinload(ScheduleDay.shifts).selectinload(ScheduleShift.persons)
         ),
-    ).order_by(MonthlySchedule.year_month.desc(), MonthlySchedule.id).offset(offset).limit(limit)
+    ).order_by(MonthlySchedule.id).offset(offset).limit(limit)
 
     schedules = list(db.scalars(stmt).all())
     return schedules, total

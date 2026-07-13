@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
-from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem
+from app.models.shift import ShiftDef, ShiftRule, ShiftRuleVersion
 from app.models.user import SysDataScope, SysPermission, SysRole
 from app.services.auth import create_user
 
@@ -63,31 +63,43 @@ def _create_shift_def(db_session, code: str = "early", name: str = "早班") -> 
 
 
 def _create_rule(db_session) -> ShiftRule:
-    rule = ShiftRule(code="rule-broadcast", name="广播规则", station_type="station_broadcast")
+    rule = ShiftRule(
+        code="rule-broadcast", name="广播规则", cycle_days=6,
+        start_date="2026-06-01", persons_per_cell=2,
+    )
     db_session.add(rule)
     db_session.commit()
     return rule
 
 
-def _create_rule_items(db_session, rule: ShiftRule, shift_codes: list[tuple[str, int]]):
-    for idx, (code, cnt) in enumerate(shift_codes):
-        db_session.add(ShiftRuleItem(rule_id=rule.id, sequence_no=idx, shift_code=code, repeat_count=cnt))
-    db_session.commit()
-
-
 def _create_person(db_session, org: OrgUnit, code: str = "P001", name: str = "值班员") -> Person:
     person = Person(code=code, name=name, person_type="duty_operator", org_unit=org,
-                    participate_schedule=True, rotation_order=1)
+                    participate_schedule=True)
     db_session.add(person)
     db_session.commit()
     return person
 
 
 def _build_full_schedule(db_session, org: OrgUnit, rule: ShiftRule, shift_defs: list[ShiftDef],
-                         persons: list[Person], year_month: str = "2026-07",
-                         status: str = "draft") -> MonthlySchedule:
-    ms = MonthlySchedule(org_unit_id=org.id, year_month=year_month, rule_id=rule.id, status=status,
-                         generated_at=datetime(2026, 7, 1, tzinfo=UTC))
+                         persons: list[Person], status: str = "draft") -> MonthlySchedule:
+    # count existing versions to generate unique version_no
+    from sqlalchemy import select as sa_select, func
+    existing_versions = db_session.scalar(
+        sa_select(func.count()).select_from(ShiftRuleVersion.__table__)
+        .where(ShiftRuleVersion.rule_id == rule.id)
+    ) or 0
+    rule_version = ShiftRuleVersion(
+        rule_id=rule.id, version_no=existing_versions + 1, cycle_days=rule.cycle_days,
+        start_date=rule.start_date, persons_per_cell=rule.persons_per_cell,
+        snapshot={"days": []},
+    )
+    db_session.add(rule_version)
+    db_session.flush()
+
+    ms = MonthlySchedule(
+        org_unit_id=org.id, rule_id=rule.id, rule_version_id=rule_version.id, status=status,
+        generated_at=datetime(2026, 7, 1, tzinfo=UTC),
+    )
     db_session.add(ms)
     db_session.flush()
 
@@ -152,7 +164,6 @@ class TestScheduleListApi:
         items = data["items"]
         assert len(items) == 1
         s = items[0]
-        assert s["year_month"] == "2026-07"
         assert s["org_unit_code"] == org.code
         assert s["org_unit_name"] == org.name
         assert s["rule_code"] == rule.code
@@ -163,30 +174,16 @@ class TestScheduleListApi:
         assert s["person_count"] == 6
         assert s["generated_at"] is not None
 
-    def test_list_filter_by_year_month(self, api_client: TestClient, db_session) -> None:
-        _, token = _create_admin(api_client, db_session)
-        org = _create_org(db_session)
-        rule = _create_rule(db_session)
-        early = _create_shift_def(db_session)
-        p1 = _create_person(db_session, org, "P001", "张三")
-        _build_full_schedule(db_session, org, rule, [early], [p1], year_month="2026-07")
-        _build_full_schedule(db_session, org, rule, [early], [p1], year_month="2026-08")
-
-        resp = api_client.get("/api/v1/schedules?year_month=2026-08",
-                              headers={"Authorization": f"Bearer {token}"})
-        assert resp.status_code == 200
-        items = resp.json()["data"]["items"]
-        assert len(items) == 1
-        assert items[0]["year_month"] == "2026-08"
-
     def test_list_filter_by_status(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
-        org = _create_org(db_session)
+        org_a = _create_org(db_session, "station-a", "台站A")
+        org_b = _create_org(db_session, "station-b", "台站B")
         rule = _create_rule(db_session)
         early = _create_shift_def(db_session)
-        p1 = _create_person(db_session, org, "P001", "张三")
-        _build_full_schedule(db_session, org, rule, [early], [p1], year_month="2026-07", status="draft")
-        _build_full_schedule(db_session, org, rule, [early], [p1], year_month="2026-08", status="published")
+        p1 = _create_person(db_session, org_a, "P001", "张三")
+        p2 = _create_person(db_session, org_b, "P002", "李四")
+        _build_full_schedule(db_session, org_a, rule, [early], [p1], status="draft")
+        _build_full_schedule(db_session, org_b, rule, [early], [p2], status="published")
 
         resp = api_client.get("/api/v1/schedules?status=published",
                               headers={"Authorization": f"Bearer {token}"})
@@ -215,12 +212,15 @@ class TestScheduleListApi:
 
     def test_list_pagination(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
-        org = _create_org(db_session)
+        org_a = _create_org(db_session, "station-a", "台站A")
+        org_b = _create_org(db_session, "station-b", "台站B")
+        org_c = _create_org(db_session, "station-c", "台站C")
         rule = _create_rule(db_session)
         early = _create_shift_def(db_session)
-        p1 = _create_person(db_session, org, "P001", "张三")
-        for m in range(1, 4):
-            _build_full_schedule(db_session, org, rule, [early], [p1], year_month=f"2026-0{m}")
+        p1 = _create_person(db_session, org_a, "P001", "张三")
+        _build_full_schedule(db_session, org_a, rule, [early], [p1])
+        _build_full_schedule(db_session, org_b, rule, [early], [p1])
+        _build_full_schedule(db_session, org_c, rule, [early], [p1])
 
         resp = api_client.get("/api/v1/schedules?page=1&page_size=2",
                               headers={"Authorization": f"Bearer {token}"})
@@ -305,7 +305,6 @@ class TestScheduleDetailApi:
         assert resp.status_code == 200
         data = resp.json()["data"]
         assert data["id"] == ms.id
-        assert data["year_month"] == "2026-07"
         assert data["org_unit_code"] == org.code
         assert data["rule_name"] == rule.name
         assert data["status"] == "draft"
@@ -366,8 +365,17 @@ class TestScheduleDaysApi:
         _, token = _create_admin(api_client, db_session)
         org = _create_org(db_session)
         rule = _create_rule(db_session)
-        ms = MonthlySchedule(org_unit_id=org.id, year_month="2026-07", rule_id=rule.id,
-                             status="not_generated")
+        rule_version = ShiftRuleVersion(
+            rule_id=rule.id, version_no=1, cycle_days=rule.cycle_days,
+            start_date=rule.start_date, persons_per_cell=rule.persons_per_cell,
+            snapshot={"days": []},
+        )
+        db_session.add(rule_version)
+        db_session.flush()
+        ms = MonthlySchedule(
+            org_unit_id=org.id, rule_id=rule.id, rule_version_id=rule_version.id,
+            status="draft",
+        )
         db_session.add(ms)
         db_session.commit()
 

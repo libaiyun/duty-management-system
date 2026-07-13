@@ -9,7 +9,13 @@ import ShiftRuleView from '@/views/base-data/ShiftRuleView.vue'
 
 vi.mock('@/services/http', () => ({
   httpClient: {
-    get: vi.fn(() => Promise.resolve({ data: [] })),
+    get: vi.fn((url: string) => {
+      if (url === '/shifts') return Promise.resolve({ data: [] })
+      if (url === '/shift-rules') return Promise.resolve({ data: [] })
+      if (url === '/org-units') return Promise.resolve({ data: [] })
+      if (url === '/persons') return Promise.resolve({ data: [] })
+      return Promise.resolve({ data: [] })
+    }),
     post: vi.fn(),
     put: vi.fn(),
     delete: vi.fn(),
@@ -26,6 +32,8 @@ async function mountShiftRuleView() {
     },
   })
 
+  // Wait for async mounted hooks
+  await new Promise((resolve) => setTimeout(resolve, 10))
   return wrapper
 }
 
@@ -63,12 +71,11 @@ describe('ShiftRuleView', () => {
     expect(tables.length).toBeGreaterThanOrEqual(2)
   })
 
-  it('has shift-def columns', () => {
+  it('has shift-def columns (编码)', () => {
     const headerTexts = wrapper
       .findAll('.el-table__header-wrapper th .cell')
       .map((c) => c.text())
     expect(headerTexts).toContain('编码')
-    expect(headerTexts).toContain('时间段')
   })
 })
 

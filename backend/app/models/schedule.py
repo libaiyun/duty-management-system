@@ -12,12 +12,14 @@ class MonthlySchedule(BaseModel):
     org_unit_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("org_unit.id", ondelete="RESTRICT"), nullable=False,
     )
-    year_month: Mapped[str] = mapped_column(String(7), nullable=False)
     rule_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("shift_rule.id", ondelete="RESTRICT"), nullable=False,
     )
+    rule_version_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("shift_rule_version.id", ondelete="RESTRICT"), nullable=False,
+    )
     status: Mapped[str] = mapped_column(
-        String(32), nullable=False, default="not_generated",
+        String(32), nullable=False, default="draft",
     )
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -26,6 +28,7 @@ class MonthlySchedule(BaseModel):
 
     org_unit = relationship("OrgUnit", backref="monthly_schedules", foreign_keys=[org_unit_id])
     rule = relationship("ShiftRule", backref="monthly_schedules", foreign_keys=[rule_id])
+    rule_version = relationship("ShiftRuleVersion", foreign_keys=[rule_version_id])
     days = relationship(
         "ScheduleDay",
         back_populates="schedule",
@@ -35,9 +38,8 @@ class MonthlySchedule(BaseModel):
 
     __table_args__ = (
         Index(
-            "uq_monthly_schedule_org_month",
+            "uq_monthly_schedule_org",
             "org_unit_id",
-            "year_month",
             unique=True,
             postgresql_where=text("deleted_at IS NULL"),
             sqlite_where=text("deleted_at IS NULL"),

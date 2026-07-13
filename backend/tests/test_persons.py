@@ -56,14 +56,13 @@ class TestPersonApi:
             "/api/v1/persons",
             json={
                 "code": "P002", "name": "李四", "person_type": "duty_operator",
-                "participate_schedule": True, "rotation_order": 1,
+                "participate_schedule": True,
             },
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
         data = resp.json()["data"]
         assert data["participate_schedule"] is True
-        assert data["rotation_order"] == 1
 
     def test_get_person_detail(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
@@ -176,7 +175,6 @@ class TestPersonModel:
 
         assert p.status == "enabled"
         assert p.participate_schedule is False
-        assert p.rotation_order is None
         assert p.org_unit_id is None
 
     def test_person_unique_code(self, db_session) -> None:

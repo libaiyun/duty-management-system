@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.api.deps import RequirePermission, get_db
@@ -21,9 +21,17 @@ router = APIRouter(prefix="/persons", tags=["persons"])
 def get_persons(
     db: Session = Depends(get_db),
     user: SysUser = Depends(RequirePermission("person:manage:view")),
+    participate_schedule: bool | None = Query(None),
+    org_unit_id: int | None = Query(None),
+    person_type: str | None = Query(None),
 ) -> ApiResponse[list[PersonResponse]]:
     scoped_ids = resolve_scoped_org_unit_ids(db, user)
-    persons = list_persons(db, org_unit_ids=scoped_ids)
+    persons = list_persons(
+        db, org_unit_ids=scoped_ids,
+        participate_schedule=participate_schedule,
+        org_unit_id=org_unit_id,
+        person_type=person_type,
+    )
     return ok([PersonResponse.model_validate(p) for p in persons])
 
 
@@ -37,7 +45,7 @@ def create_person_endpoint(
         db, body.code, body.name, body.person_type,
         org_unit_id=body.org_unit_id, phone=body.phone,
         participate_schedule=body.participate_schedule,
-        rotation_order=body.rotation_order, remark=body.remark,
+        remark=body.remark,
     )
     db.commit()
     return ok(PersonResponse.model_validate(p))
@@ -67,7 +75,6 @@ def update_person_endpoint(
         org_unit_id=body.org_unit_id,
         name=body.name, phone=body.phone,
         participate_schedule=body.participate_schedule,
-        rotation_order=body.rotation_order,
         status=body.status, remark=body.remark,
     )
     db.commit()

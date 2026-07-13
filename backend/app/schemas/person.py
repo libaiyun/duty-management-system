@@ -8,7 +8,6 @@ class PersonCreateRequest(BaseModel):
     person_type: str = Field(..., min_length=1, max_length=32)
     phone: str | None = None
     participate_schedule: bool = False
-    rotation_order: int | None = None
     remark: str | None = None
 
 
@@ -17,7 +16,6 @@ class PersonUpdateRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=64)
     phone: str | None = None
     participate_schedule: bool | None = None
-    rotation_order: int | None = None
     status: str | None = None
     remark: str | None = None
 
@@ -30,7 +28,6 @@ class PersonResponse(BaseModel):
     person_type: str
     phone: str | None = None
     participate_schedule: bool
-    rotation_order: int | None = None
     status: str
     remark: str | None = None
 

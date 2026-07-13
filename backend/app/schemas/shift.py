@@ -1,3 +1,5 @@
+from datetime import date as date_type
+
 from pydantic import BaseModel, Field
 
 
@@ -29,43 +31,53 @@ class ShiftDefResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-class ShiftRuleItemRequest(BaseModel):
-    group_type: str = Field(..., min_length=1, max_length=32)
-    sequence_no: int = 0
-    shift_code: str = Field(..., min_length=1, max_length=32)
-    repeat_count: int = Field(1, ge=1)
-    remark: str | None = Field(None, max_length=255)
+class ShiftRuleCellRequest(BaseModel):
+    shift_def_id: int
+    person_ids: list[int]
+
+
+class ShiftRuleDayRequest(BaseModel):
+    day_no: int = Field(..., ge=1)
+    cells: list[ShiftRuleCellRequest]
 
 
 class ShiftRuleCreateRequest(BaseModel):
     org_unit_id: int | None = None
     code: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
     name: str = Field(..., min_length=1, max_length=128)
-    station_type: str = Field(..., min_length=1, max_length=64)
-    persons_per_shift: int = Field(2, ge=1)
-    rule_type: str = Field("broadcast_fixed", min_length=1, max_length=32)
+    cycle_days: int = Field(6, ge=1)
+    start_date: date_type
+    persons_per_cell: int = Field(2, ge=1)
     remark: str | None = None
-    items: list[ShiftRuleItemRequest] = Field(default_factory=list)
+    days: list[ShiftRuleDayRequest] = Field(default_factory=list)
 
 
 class ShiftRuleUpdateRequest(BaseModel):
     org_unit_id: int | None = None
     name: str | None = Field(None, min_length=1, max_length=128)
-    station_type: str | None = Field(None, min_length=1, max_length=64)
-    persons_per_shift: int | None = Field(None, ge=1)
-    rule_type: str | None = Field(None, min_length=1, max_length=32)
-    status: str | None = None
+    cycle_days: int | None = Field(None, ge=1)
+    start_date: date_type | None = None
+    persons_per_cell: int | None = Field(None, ge=1)
     remark: str | None = None
-    items: list[ShiftRuleItemRequest] | None = None
+    days: list[ShiftRuleDayRequest] | None = None
 
 
 class ShiftRuleItemResponse(BaseModel):
     id: int
-    group_type: str
-    sequence_no: int
-    shift_code: str
-    repeat_count: int
-    remark: str | None = None
+    day_no: int
+    cell_persons: dict
+
+    model_config = {"from_attributes": True}
+
+
+class ShiftRuleVersionResponse(BaseModel):
+    id: int
+    version_no: int
+    cycle_days: int
+    start_date: str
+    persons_per_cell: int
+    status: str
+    snapshot: dict
 
     model_config = {"from_attributes": True}
 
@@ -75,11 +87,18 @@ class ShiftRuleResponse(BaseModel):
     org_unit_id: int | None = None
     code: str
     name: str
-    station_type: str
-    persons_per_shift: int
-    rule_type: str
+    cycle_days: int
+    start_date: str
+    persons_per_cell: int
     status: str
     remark: str | None = None
+    latest_version_id: int | None = None
     items: list[ShiftRuleItemResponse] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}
+
+
+class ShiftRulePublishResponse(BaseModel):
+    id: int
+    status: str
+    message: str
