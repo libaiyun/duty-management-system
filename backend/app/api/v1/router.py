@@ -1,6 +1,16 @@
 from fastapi import APIRouter
 
-from app.api.v1.routes import auth, health, org_units, permissions, persons, roles, shifts, users
+from app.api.v1.routes import (
+    auth,
+    health,
+    org_units,
+    permissions,
+    persons,
+    roles,
+    shift_rules,
+    shifts,
+    users,
+)
 
 api_router = APIRouter()
 api_router.include_router(health.router, tags=["health"])
@@ -11,3 +21,4 @@ api_router.include_router(permissions.router, tags=["permissions"])
 api_router.include_router(org_units.router, tags=["org-units"])
 api_router.include_router(persons.router, tags=["persons"])
 api_router.include_router(shifts.router, tags=["shifts"])
+api_router.include_router(shift_rules.router, tags=["shift-rules"])

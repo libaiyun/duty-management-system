@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from sqlalchemy import exists, select
+from sqlalchemy import exists, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -14,7 +14,7 @@ from app.core.security import (
 )
 from app.models.organization import OrgUnit
 from app.models.person import Person
-from app.models.shift import ShiftDef
+from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem
 from app.models.user import SysDataScope, SysPermission, SysRole, SysUser, sys_role_permission, sys_user_role
 
 
@@ -389,3 +389,108 @@ def update_shift_def(
         sd.status = status
     db.flush()
     return sd
+
+
+def list_shift_rules(db: Session) -> list[ShiftRule]:
+    return list(db.scalars(select(ShiftRule).order_by(ShiftRule.id)).all())
+
+
+def get_shift_rule(db: Session, rule_id: int) -> ShiftRule | None:
+    return db.get(ShiftRule, rule_id)
+
+
+def _set_rule_items(rule: ShiftRule, items: list[dict]) -> None:
+    for item in sorted(items, key=lambda i: i.get("sequence_no", 0)):
+        rule.items.append(ShiftRuleItem(
+            group_type=item["group_type"],
+            sequence_no=item.get("sequence_no", 0),
+            shift_code=item["shift_code"],
+            repeat_count=item.get("repeat_count", 1),
+            remark=item.get("remark"),
+        ))
+
+
+def create_shift_rule(
+    db: Session, code: str, name: str, station_type: str,
+    persons_per_shift: int = 2,
+    rule_type: str = "broadcast_fixed",
+    org_unit_id: int | None = None,
+    remark: str | None = None,
+    items: list[dict] | None = None,
+) -> ShiftRule:
+    existing = db.scalars(select(ShiftRule).where(ShiftRule.code == code)).first()
+    if existing:
+        raise StateConflictError(message=f"规则编码 '{code}' 已存在")
+    if org_unit_id is not None and db.get(OrgUnit, org_unit_id) is None:
+        raise NotFoundError(message="组织不存在")
+    rule = ShiftRule(
+        code=code, name=name, station_type=station_type,
+        persons_per_shift=persons_per_shift, rule_type=rule_type,
+        org_unit_id=org_unit_id, remark=remark,
+    )
+    _set_rule_items(rule, items or [])
+    db.add(rule)
+    db.flush()
+    return rule
+
+
+def _rule_is_referenced(db: Session, rule_id: int) -> bool:
+    # 排班表（monthly_schedule）在 M3 引入。此处做前向兼容检查：
+    # 若排班表已存在且引用了该规则，则视为被引用，不允许删除。
+    bind = db.get_bind()
+    inspector = inspect(bind)
+    if not inspector.has_table("monthly_schedule"):
+        return False
+    count = db.scalar(
+        text("SELECT COUNT(1) FROM monthly_schedule WHERE rule_id = :rid"),
+        {"rid": rule_id},
+    )
+    return bool(count)
+
+
+def update_shift_rule(
+    db: Session, rule_id: int,
+    name: str | None = None,
+    station_type: str | None = None,
+    persons_per_shift: int | None = None,
+    rule_type: str | None = None,
+    status: str | None = None,
+    org_unit_id: int | None = None,
+    remark: str | None = None,
+    items: list[dict] | None = None,
+) -> ShiftRule:
+    rule = db.get(ShiftRule, rule_id)
+    if rule is None:
+        raise NotFoundError(message="排班规则不存在")
+    if org_unit_id is not None:
+        if db.get(OrgUnit, org_unit_id) is None:
+            raise NotFoundError(message="组织不存在")
+        rule.org_unit_id = org_unit_id
+    if name is not None:
+        rule.name = name
+    if station_type is not None:
+        rule.station_type = station_type
+    if persons_per_shift is not None:
+        rule.persons_per_shift = persons_per_shift
+    if rule_type is not None:
+        rule.rule_type = rule_type
+    if status is not None:
+        rule.status = status
+    if remark is not None:
+        rule.remark = remark
+    if items is not None:
+        rule.items.clear()
+        db.flush()
+        _set_rule_items(rule, items)
+    db.flush()
+    return rule
+
+
+def delete_shift_rule(db: Session, rule_id: int) -> None:
+    rule = db.get(ShiftRule, rule_id)
+    if rule is None:
+        raise NotFoundError(message="排班规则不存在")
+    if _rule_is_referenced(db, rule_id):
+        raise StateConflictError(message="规则已被排班引用，不能删除")
+    db.delete(rule)
+    db.flush()
