@@ -8,6 +8,7 @@ from app.api.v1.routes import (
     permissions,
     persons,
     roles,
+    schedules,
     shift_rules,
     shifts,
     users,
@@ -24,3 +25,4 @@ api_router.include_router(persons.router, tags=["persons"])
 api_router.include_router(shifts.router, tags=["shifts"])
 api_router.include_router(shift_rules.router, tags=["shift-rules"])
 api_router.include_router(holidays.router, tags=["holidays"])
+api_router.include_router(schedules.router, tags=["schedules"])
