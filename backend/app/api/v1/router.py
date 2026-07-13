@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1.routes import (
     auth,
     health,
+    holidays,
     org_units,
     permissions,
     persons,
@@ -22,3 +23,4 @@ api_router.include_router(org_units.router, tags=["org-units"])
 api_router.include_router(persons.router, tags=["persons"])
 api_router.include_router(shifts.router, tags=["shifts"])
 api_router.include_router(shift_rules.router, tags=["shift-rules"])
+api_router.include_router(holidays.router, tags=["holidays"])
