@@ -9,6 +9,7 @@ import App from '@/App.vue'
 import { router } from '@/router'
 import { httpClient } from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
+import { useRoomContextStore } from '@/stores/room-context'
 
 const app = createApp(App)
 const pinia = createPinia()
@@ -18,9 +19,11 @@ app.use(router)
 app.use(ElementPlus)
 
 const authStore = useAuthStore()
+const roomContextStore = useRoomContextStore()
 
 httpClient.configureCallbacks({
   getToken: () => authStore.accessToken || null,
+  getCurrentRoomId: () => roomContextStore.currentRoomId,
   onUnauthorized: () => {
     authStore.forceLogout()
     router.push({ name: 'login' })

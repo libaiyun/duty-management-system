@@ -19,8 +19,8 @@
         </div>
 
         <div class="holiday-view__toolbar">
-          <el-button type="primary" @click="openCreateDialog">新增节假日</el-button>
-          <el-button @click="openImportDialog">批量导入</el-button>
+          <el-button v-if="canManageGlobalHolidays" type="primary" @click="openCreateDialog">新增节假日</el-button>
+          <el-button v-if="canManageGlobalHolidays" @click="openImportDialog">批量导入</el-button>
         </div>
 
         <el-table :data="holidays" v-loading="loading" stripe>
@@ -42,7 +42,7 @@
             </template>
           </el-table-column>
           <el-table-column prop="remark" label="备注" min-width="140" />
-          <el-table-column label="操作" width="220" fixed="right">
+          <el-table-column v-if="canManageGlobalHolidays" label="操作" width="220" fixed="right">
             <template #default="{ row }">
               <el-button size="small" @click="openEditDialog(row)">编辑</el-button>
               <el-button
@@ -60,18 +60,25 @@
 
       <!-- 餐补标准 -->
       <el-tab-pane label="餐补标准" name="meal-standard">
+        <div class="holiday-view__toolbar">
+          <el-button v-if="!editingStandard && canManageStandard" type="primary" @click="editingStandard = true">编辑标准</el-button>
+          <template v-else>
+            <el-button @click="cancelStandardEdit">取消</el-button>
+            <el-button type="primary" :loading="savingStandard" @click="saveStandard">保存标准</el-button>
+          </template>
+        </div>
         <el-alert
-          title="以下为广播发射台首期固定标准，仅供查看，暂不支持修改。"
+          title="以下标准适用于当前机房；首次访问时系统会预填充默认值。"
           type="info"
           :closable="false"
           class="holiday-view__standard-tip"
         />
         <el-descriptions :column="1" border class="holiday-view__standard">
-          <el-descriptions-item label="早班餐补">{{ standard.early_meal }} 元 / 人 / 班</el-descriptions-item>
-          <el-descriptions-item label="中班餐补">{{ standard.middle_meal }} 元 / 人 / 班</el-descriptions-item>
-          <el-descriptions-item label="晚班餐补">{{ standard.night_meal }} 元 / 人 / 班</el-descriptions-item>
+          <el-descriptions-item label="早班餐补"><el-input-number v-if="editingStandard" v-model="standard.early_meal" :min="0" /> <template v-else>{{ standard.early_meal }}</template> 元 / 人 / 班</el-descriptions-item>
+          <el-descriptions-item label="中班餐补"><el-input-number v-if="editingStandard" v-model="standard.middle_meal" :min="0" /> <template v-else>{{ standard.middle_meal }}</template> 元 / 人 / 班</el-descriptions-item>
+          <el-descriptions-item label="晚班餐补"><el-input-number v-if="editingStandard" v-model="standard.night_meal" :min="0" /> <template v-else>{{ standard.night_meal }}</template> 元 / 人 / 班</el-descriptions-item>
           <el-descriptions-item label="餐补退费（晚班退给中班）">
-            {{ standard.meal_refund_night_to_middle }} 元 / 班
+            <el-input-number v-if="editingStandard" v-model="standard.meal_refund_night_to_middle" :min="0" /> <template v-else>{{ standard.meal_refund_night_to_middle }}</template> 元 / 班
           </el-descriptions-item>
         </el-descriptions>
       </el-tab-pane>
@@ -79,17 +86,17 @@
       <!-- 节假日加班费标准 -->
       <el-tab-pane label="节假日加班费标准" name="overtime-standard">
         <el-alert
-          title="以下为法定节假日加班费首期固定标准，仅供查看，暂不支持修改。"
+          title="以下标准适用于当前机房。"
           type="info"
           :closable="false"
           class="holiday-view__standard-tip"
         />
         <el-descriptions :column="1" border class="holiday-view__standard">
           <el-descriptions-item label="节假日加班费">
-            {{ standard.holiday_overtime }} 元 / 人 / 班
+            <el-input-number v-if="editingStandard" v-model="standard.holiday_overtime" :min="0" /> <template v-else>{{ standard.holiday_overtime }}</template> 元 / 人 / 班
           </el-descriptions-item>
           <el-descriptions-item label="加班费退费（晚班退给中班）">
-            {{ standard.holiday_overtime_refund_night_to_middle }} 元 / 班
+            <el-input-number v-if="editingStandard" v-model="standard.holiday_overtime_refund_night_to_middle" :min="0" /> <template v-else>{{ standard.holiday_overtime_refund_night_to_middle }}</template> 元 / 班
           </el-descriptions-item>
         </el-descriptions>
       </el-tab-pane>
@@ -156,6 +163,8 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
 import { httpClient, resolveErrorMessage } from '@/services/http'
+import { usePermissionStore } from '@/stores/permission'
+import { PERMISSION_CODES } from '@/types/permission'
 
 interface HolidayItem {
   id: number
@@ -183,6 +192,9 @@ interface ImportResult {
 }
 
 const activeTab = ref('holiday')
+const permissionStore = usePermissionStore()
+const canManageGlobalHolidays = computed(() => permissionStore.hasPermission(PERMISSION_CODES.HOLIDAY_GLOBAL_MANAGE))
+const canManageStandard = computed(() => permissionStore.hasPermission(PERMISSION_CODES.HOLIDAY_STANDARD_MANAGE))
 
 const holidays = ref<HolidayItem[]>([])
 const loading = ref(false)
@@ -196,6 +208,9 @@ const standard = reactive<SubsidyStandard>({
   holiday_overtime: 0,
   holiday_overtime_refund_night_to_middle: 0,
 })
+const standardSnapshot = reactive<SubsidyStandard>({ ...standard })
+const editingStandard = ref(false)
+const savingStandard = ref(false)
 
 const yearOptions = computed(() => {
   const current = new Date().getFullYear()
@@ -225,8 +240,29 @@ async function loadStandard() {
   try {
     const resp = await httpClient.get<SubsidyStandard>('/holidays/standard')
     Object.assign(standard, resp.data)
+    Object.assign(standardSnapshot, resp.data)
   } catch {
     // 标准数据加载失败不阻塞页面
+  }
+}
+
+function cancelStandardEdit() {
+  Object.assign(standard, standardSnapshot)
+  editingStandard.value = false
+}
+
+async function saveStandard() {
+  savingStandard.value = true
+  try {
+    const response = await httpClient.put<SubsidyStandard>('/holidays/standard', standard)
+    Object.assign(standard, response.data)
+    Object.assign(standardSnapshot, response.data)
+    editingStandard.value = false
+    ElMessage.success('费用标准已保存')
+  } catch (error) {
+    ElMessage.error(resolveErrorMessage(error, '保存费用标准失败'))
+  } finally {
+    savingStandard.value = false
   }
 }
 

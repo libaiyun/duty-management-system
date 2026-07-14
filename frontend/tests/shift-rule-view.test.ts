@@ -4,15 +4,16 @@ import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { router as appRouter } from '@/router'
+import { httpClient } from '@/services/http'
 
 import ShiftRuleView from '@/views/base-data/ShiftRuleView.vue'
+import ShiftDefView from '@/views/base-data/ShiftDefView.vue'
 
 vi.mock('@/services/http', () => ({
   httpClient: {
     get: vi.fn((url: string) => {
       if (url === '/shifts') return Promise.resolve({ data: [] })
       if (url === '/shift-rules') return Promise.resolve({ data: [] })
-      if (url === '/org-units') return Promise.resolve({ data: [] })
       if (url === '/persons') return Promise.resolve({ data: [] })
       return Promise.resolve({ data: [] })
     }),
@@ -22,11 +23,11 @@ vi.mock('@/services/http', () => ({
   },
 }))
 
-async function mountShiftRuleView() {
+async function mountView(component: typeof ShiftRuleView | typeof ShiftDefView) {
   const pinia = createPinia()
   setActivePinia(pinia)
 
-  const wrapper = mount(ShiftRuleView, {
+  const wrapper = mount(component, {
     global: {
       plugins: [pinia, appRouter, ElementPlus],
     },
@@ -37,62 +38,84 @@ async function mountShiftRuleView() {
   return wrapper
 }
 
-describe('ShiftRuleView', () => {
+describe('ShiftDefView', () => {
   let wrapper: ReturnType<typeof mount>
 
   beforeEach(async () => {
-    wrapper = await mountShiftRuleView()
+    wrapper = await mountView(ShiftDefView)
   })
 
   afterEach(() => {
     vi.clearAllMocks()
   })
 
-  it('renders the page title', () => {
+  it('renders the shift definition page', () => {
     expect(wrapper.find('h1').text()).toBe('班次规则')
+    expect(wrapper.text()).toContain('新增班次')
+    expect(wrapper.find('.el-tabs').exists()).toBe(false)
+    expect(httpClient.get).toHaveBeenCalledWith('/shifts')
+  })
+})
+
+describe('ShiftRuleView', () => {
+  let wrapper: ReturnType<typeof mount>
+
+  beforeEach(async () => {
+    wrapper = await mountView(ShiftRuleView)
   })
 
-  it('renders two tabs (班次定义 / 排班规则)', () => {
-    const tabs = wrapper.findAll('.el-tabs__item')
-    const labels = tabs.map((t) => t.text())
-    expect(labels).toContain('班次定义')
-    expect(labels).toContain('排班规则')
+  afterEach(() => {
+    vi.clearAllMocks()
   })
 
-  it('renders add buttons in toolbars', () => {
-    const btns = wrapper.findAll('.shift-rule-view__toolbar .el-button')
-    const texts = btns.map((b) => b.text())
-    expect(texts).toContain('新增班次')
-    expect(texts).toContain('新增规则')
+  it('renders the scheduling rule page without an org-unit selector', () => {
+    expect(wrapper.find('h1').text()).toBe('排班规则')
+    expect(wrapper.text()).toContain('新增规则')
+    expect(wrapper.text()).not.toContain('适用机房')
+    expect(wrapper.find('.el-tabs').exists()).toBe(false)
+    expect(httpClient.get).toHaveBeenCalledWith('/shift-rules')
+    expect(httpClient.get).not.toHaveBeenCalledWith('/org-units')
   })
 
-  it('renders tables for both tabs', () => {
-    const tables = wrapper.findAllComponents({ name: 'ElTable' })
-    expect(tables.length).toBeGreaterThanOrEqual(2)
-  })
+  it('offers publishing again after the refreshed rule is a draft', async () => {
+    vi.mocked(httpClient.get).mockImplementation((url: string) => {
+      if (url === '/shift-rules') {
+        return Promise.resolve({
+          code: 'OK',
+          message: 'success',
+          trace_id: '',
+          data: [{ id: 1, code: 'rule', name: '规则', cycle_days: 1, start_date: '2027-01-01', persons_per_cell: 1, status: 'draft', remark: null, latest_version_id: 2, items: [] }],
+        })
+      }
+      return Promise.resolve({ code: 'OK', message: 'success', trace_id: '', data: [] })
+    })
+    wrapper.unmount()
+    wrapper = await mountView(ShiftRuleView)
 
-  it('has shift-def columns (编码)', () => {
-    const headerTexts = wrapper
-      .findAll('.el-table__header-wrapper th .cell')
-      .map((c) => c.text())
-    expect(headerTexts).toContain('编码')
+    expect(wrapper.text()).toContain('发布')
   })
 })
 
 describe('ShiftRuleView route', () => {
-  it('shift-rule route is registered with correct path', () => {
-    const route = appRouter.getRoutes().find((r) => r.name === 'shift-rule')
+  it('schedule-rule route is registered with correct path', () => {
+    const route = appRouter.getRoutes().find((r) => r.name === 'schedule-rule')
     expect(route).toBeDefined()
-    expect(route?.path).toBe('/base-data/shift-rule')
+    expect(route?.path).toBe('/schedule-rule')
   })
 
-  it('shift-rule route has permission code assigned', () => {
-    const route = appRouter.getRoutes().find((r) => r.name === 'shift-rule')
+  it('schedule-rule route has permission code assigned', () => {
+    const route = appRouter.getRoutes().find((r) => r.name === 'schedule-rule')
     expect(route?.meta.permission).toBe('shift:rule:view')
   })
 
-  it('shift-rule route has a component', () => {
-    const route = appRouter.getRoutes().find((r) => r.name === 'shift-rule')
+  it('schedule-rule route has a component', () => {
+    const route = appRouter.getRoutes().find((r) => r.name === 'schedule-rule')
+    expect(route?.components?.default).toBeDefined()
+  })
+
+  it('shift-def route is registered with the shift definition component', async () => {
+    const route = appRouter.getRoutes().find((r) => r.name === 'shift-def')
+    expect(route?.path).toBe('/base-data/shifts')
     expect(route?.components?.default).toBeDefined()
   })
 })

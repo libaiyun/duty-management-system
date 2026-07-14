@@ -15,7 +15,7 @@ describe('router auth guard', () => {
   })
 
   it('unauthenticated user is redirected to /login', async () => {
-    await router.push('/my-duty/schedule')
+    await router.push('/schedule-mgmt/table')
     expect(router.currentRoute.value.name).toBe('login')
   })
 
@@ -25,8 +25,8 @@ describe('router auth guard', () => {
   })
 
   it('redirect query is set when redirecting to login', async () => {
-    await router.push('/my-duty/schedule')
-    expect(router.currentRoute.value.query.redirect).toBe('/my-duty/schedule')
+    await router.push('/schedule-mgmt/table')
+    expect(router.currentRoute.value.query.redirect).toBe('/schedule-mgmt/table')
   })
 
   it('authenticated user can access protected route', async () => {

@@ -4,6 +4,7 @@ import { httpClient } from '@/services/http'
 import type { LoginRequest, TokenResponse, UserMeResponse } from '@/types/auth'
 import { useAppStore } from '@/stores/app'
 import { usePermissionStore } from '@/stores/permission'
+import { useRoomContextStore } from '@/stores/room-context'
 import type { PermissionCode } from '@/types/permission'
 
 const TOKEN_KEY = 'duty_access_token'
@@ -16,6 +17,10 @@ export const useAuthStore = defineStore('auth', {
     refreshToken: localStorage.getItem(REFRESH_TOKEN_KEY) || '',
     username: '',
     displayName: localStorage.getItem(USER_KEY) || '',
+    personId: null as number | null,
+    roomId: null as number | null,
+    roomName: '',
+    canSwitchRoom: false,
   }),
 
   getters: {
@@ -39,6 +44,10 @@ export const useAuthStore = defineStore('auth', {
       const user = meResp.data
       this.username = user.username
       this.displayName = user.display_name
+      this.personId = user.person_id
+      this.roomId = user.room_id
+      this.roomName = user.room_name || ''
+      this.canSwitchRoom = user.can_switch_room
       localStorage.setItem(USER_KEY, user.display_name)
 
       const appStore = useAppStore()
@@ -67,6 +76,10 @@ export const useAuthStore = defineStore('auth', {
         const user = meResp.data
         this.username = user.username
         this.displayName = user.display_name
+        this.personId = user.person_id
+        this.roomId = user.room_id
+        this.roomName = user.room_name || ''
+        this.canSwitchRoom = user.can_switch_room
         localStorage.setItem(USER_KEY, user.display_name)
         appStore.userName = user.display_name
 
@@ -87,6 +100,10 @@ export const useAuthStore = defineStore('auth', {
       this.refreshToken = ''
       this.username = ''
       this.displayName = ''
+      this.personId = null
+      this.roomId = null
+      this.roomName = ''
+      this.canSwitchRoom = false
       localStorage.removeItem(TOKEN_KEY)
       localStorage.removeItem(REFRESH_TOKEN_KEY)
       localStorage.removeItem(USER_KEY)
@@ -96,6 +113,9 @@ export const useAuthStore = defineStore('auth', {
 
       const permStore = usePermissionStore()
       permStore.clearPermissions()
+
+      const roomContextStore = useRoomContextStore()
+      roomContextStore.clear()
     },
   },
 })

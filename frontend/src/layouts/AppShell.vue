@@ -18,10 +18,25 @@
             <Bell />
           </el-icon>
         </el-badge>
+        <el-select
+          v-if="showRoomSwitcher"
+          :model-value="roomContextStore.selectedRoomId"
+          class="app-header__room-switcher"
+          placeholder="选择机房"
+          clearable
+          @update:model-value="roomContextStore.selectRoom"
+        >
+          <el-option
+            v-for="room in roomContextStore.rooms"
+            :key="room.id"
+            :label="room.name"
+            :value="room.id"
+          />
+        </el-select>
         <el-dropdown trigger="click">
           <div class="app-header__user">
             <el-avatar :size="32" :icon="UserFilled" />
-            <span class="app-header__user-name">{{ appStore.userName }}</span>
+            <span class="app-header__user-name">{{ userLabel }}</span>
             <el-icon :size="14">
               <ArrowDown />
             </el-icon>
@@ -88,7 +103,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   ArrowDown,
@@ -103,17 +118,37 @@ import { useBreadcrumb } from '@/composables/useBreadcrumb'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { usePermissionStore } from '@/stores/permission'
+import { useRoomContextStore } from '@/stores/room-context'
 
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const permissionStore = usePermissionStore()
+const roomContextStore = useRoomContextStore()
 const route = useRoute()
 const router = useRouter()
 const { breadcrumbs } = useBreadcrumb()
 
+const GLOBAL_PAGE_NAMES = new Set(['org-unit', 'account-role', 'operation-log', 'backup-archive'])
+
+const showRoomSwitcher = computed(() =>
+  authStore.canSwitchRoom && !GLOBAL_PAGE_NAMES.has(String(route.name)),
+)
+const userLabel = computed(() => {
+  if (authStore.canSwitchRoom || !roomContextStore.currentRoomName) return appStore.userName
+  return `${appStore.userName} · ${roomContextStore.currentRoomName}`
+})
+
 const visibleMenuItems = computed(() =>
   filterMenuByPermission(menuItems, (code) => permissionStore.hasPermission(code)),
 )
+
+onMounted(async () => {
+  try {
+    await roomContextStore.loadRooms()
+  } catch {
+    // The selector remains empty until organization data becomes available.
+  }
+})
 
 async function handleLogout(): Promise<void> {
   await authStore.logout()
@@ -171,6 +206,10 @@ async function handleLogout(): Promise<void> {
 
 .app-header__icon:hover {
   color: var(--el-color-primary);
+}
+
+.app-header__room-switcher {
+  width: 180px;
 }
 
 .app-header__user {

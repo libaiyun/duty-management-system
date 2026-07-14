@@ -26,7 +26,7 @@ def _create_person(db_session, org: OrgUnit, code: str = "P001", name: str = "�
 
 
 def _create_shift_def(db_session) -> ShiftDef:
-    sd = ShiftDef(code="early", name="早班", start_time="00:00", end_time="08:00")
+    sd = ShiftDef(org_unit_id=1, code="early", name="早班", start_time="00:00", end_time="08:00")
     db_session.add(sd)
     db_session.commit()
     return sd

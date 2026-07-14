@@ -1,8 +1,11 @@
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.models.shift import ShiftDef
-from app.models.user import SysPermission, SysRole
+from app.models.organization import OrgUnit
+from app.models.person import Person
+from app.models.user import SysDataScope, SysPermission, SysRole
 from app.services.auth import create_user
 
 pytestmark = pytest.mark.usefixtures("create_tables")
@@ -15,11 +18,21 @@ def _login(api_client: TestClient, db_session, username: str, password: str) -> 
 
 
 def _create_admin(api_client: TestClient, db_session) -> tuple[int, str]:
+    room = OrgUnit(code="room-1", name="测试机房", type="room")
+    db_session.add(room)
+    db_session.flush()
+    person = Person(code="P001", name="管理员", person_type="director", org_unit_id=room.id)
+    db_session.add(person)
+    db_session.flush()
     user = create_user(db_session, "admin", "password123", "管理员")
-    perm = SysPermission(code="shift:rule:view", name="View Shift Rule", type="api")
+    user.person_id = person.id
+    permissions = [
+        SysPermission(code="shift:def:view", name="View Shift", type="api"),
+        SysPermission(code="shift:def:manage", name="Manage Shift", type="api"),
+    ]
     role = SysRole(code="admin-role", name="Admin")
-    role.permissions.append(perm)
-    db_session.add_all([perm, role])
+    role.permissions.extend(permissions)
+    db_session.add_all([*permissions, role])
     user.roles.append(role)
     db_session.commit()
     token = _login(api_client, db_session, "admin", "password123")
@@ -27,11 +40,63 @@ def _create_admin(api_client: TestClient, db_session) -> tuple[int, str]:
 
 
 class TestShiftDefApi:
-    def test_list_empty(self, api_client: TestClient, db_session) -> None:
+    def test_global_scope_requires_selected_room(self, api_client: TestClient, db_session) -> None:
+        room = OrgUnit(code="room-1", name="测试机房", type="room")
+        db_session.add(room)
+        user = create_user(db_session, "global-admin", "password123", "管理员")
+        permission = SysPermission(code="shift:def:view", name="View Shift", type="api")
+        role = SysRole(code="global-role", name="Global")
+        role.permissions.append(permission)
+        user.roles.append(role)
+        db_session.add_all([permission, role, SysDataScope(user_id=user.id, scope_type="all")])
+        db_session.commit()
+        token = _login(api_client, db_session, "global-admin", "password123")
+
+        missing = api_client.get("/api/v1/shifts", headers={"Authorization": f"Bearer {token}"})
+        assert missing.status_code == 422
+        assert missing.json()["code"] == "ADMIN_NO_ROOM_SELECTED"
+
+        selected = api_client.get(
+            "/api/v1/shifts",
+            headers={"Authorization": f"Bearer {token}", "X-Current-Room-Id": str(room.id)},
+        )
+        assert selected.status_code == 200
+
+    def test_list_initializes_default_shifts_for_current_room(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
         resp = api_client.get("/api/v1/shifts", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
-        assert resp.json()["data"] == []
+        assert [
+            (shift["code"], shift["name"], shift["start_time"], shift["end_time"], shift["display_order"])
+            for shift in resp.json()["data"]
+        ] == [
+            ("early", "早班", "00:00", "08:00", 1),
+            ("middle", "中班", "08:00", "16:00", 2),
+            ("night", "晚班", "16:00", "24:00", 3),
+        ]
+
+    def test_default_shifts_are_initialized_per_room(self, api_client: TestClient, db_session) -> None:
+        user_id, token = _create_admin(api_client, db_session)
+        second_room = OrgUnit(code="room-2", name="第二机房", type="room")
+        db_session.add(second_room)
+        db_session.add(SysDataScope(user_id=user_id, scope_type="all"))
+        db_session.commit()
+
+        first_room_id = db_session.scalar(select(OrgUnit.id).where(OrgUnit.code == "room-1"))
+        assert first_room_id is not None
+        api_client.headers["X-Current-Room-Id"] = str(first_room_id)
+        first = api_client.get("/api/v1/shifts", headers={"Authorization": f"Bearer {token}"})
+        api_client.headers["X-Current-Room-Id"] = str(second_room.id)
+        second = api_client.get(
+            "/api/v1/shifts",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert len(first.json()["data"]) == 3
+        assert len(second.json()["data"]) == 3
+        assert {shift["org_unit_id"] for shift in first.json()["data"]} != {
+            shift["org_unit_id"] for shift in second.json()["data"]
+        }
 
     def test_create_shift(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
@@ -154,6 +219,22 @@ class TestShiftDefApi:
         )
         assert resp.status_code == 422
 
+    def test_rejects_overlap_with_overnight_shift_after_midnight(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        api_client.post(
+            "/api/v1/shifts",
+            json={"code": "overnight", "name": "跨夜班", "start_time": "20:00", "end_time": "04:00"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        resp = api_client.post(
+            "/api/v1/shifts",
+            json={"code": "after_midnight", "name": "凌晨班", "start_time": "02:00", "end_time": "06:00"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 422
+
     def test_requires_permission(self, api_client: TestClient, db_session) -> None:
         user = create_user(db_session, "worker", "pass", "普通用户")
         db_session.commit()
@@ -165,7 +246,10 @@ class TestShiftDefApi:
 
 class TestShiftDefModel:
     def test_default_values(self, db_session) -> None:
-        sd = ShiftDef(code="early", name="早班", start_time="00:00", end_time="08:00")
+        room = OrgUnit(code="room-1", name="测试机房", type="room")
+        db_session.add(room)
+        db_session.flush()
+        sd = ShiftDef(org_unit_id=room.id, code="early", name="早班", start_time="00:00", end_time="08:00")
         db_session.add(sd)
         db_session.commit()
 
@@ -173,8 +257,11 @@ class TestShiftDefModel:
         assert sd.display_order == 0
 
     def test_unique_code(self, db_session) -> None:
-        db_session.add(ShiftDef(code="early", name="早班", start_time="00:00", end_time="08:00"))
+        room = OrgUnit(code="room-1", name="测试机房", type="room")
+        db_session.add(room)
+        db_session.flush()
+        db_session.add(ShiftDef(org_unit_id=room.id, code="early", name="早班", start_time="00:00", end_time="08:00"))
         db_session.commit()
-        db_session.add(ShiftDef(code="early", name="早班重复", start_time="10:00", end_time="14:00"))
+        db_session.add(ShiftDef(org_unit_id=room.id, code="early", name="早班重复", start_time="10:00", end_time="14:00"))
         with pytest.raises(Exception):
             db_session.commit()

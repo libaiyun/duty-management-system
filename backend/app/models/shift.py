@@ -9,12 +9,21 @@ from app.models.base import BaseModel
 class ShiftDef(BaseModel):
     __tablename__ = "shift_def"
 
-    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    org_unit_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("org_unit.id", ondelete="RESTRICT"), nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
     name: Mapped[str] = mapped_column(String(64), nullable=False)
     start_time: Mapped[str] = mapped_column(String(5), nullable=False)
     end_time: Mapped[str] = mapped_column(String(5), nullable=False)
     display_order: Mapped[int] = mapped_column(default=0)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="enabled")
+
+    org_unit = relationship("OrgUnit", backref="shift_defs", foreign_keys=[org_unit_id])
+
+    __table_args__ = (
+        UniqueConstraint("org_unit_id", "code", name="uq_shift_def_org_code"),
+    )
 
 
 class ShiftRule(BaseModel):

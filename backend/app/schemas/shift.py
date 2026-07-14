@@ -21,6 +21,7 @@ class ShiftDefUpdateRequest(BaseModel):
 
 class ShiftDefResponse(BaseModel):
     id: int
+    org_unit_id: int
     code: str
     name: str
     start_time: str

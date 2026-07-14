@@ -1,7 +1,7 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
-from app.api.deps import RequirePermission, get_db
+from app.api.deps import RequirePermission, get_db, resolve_current_room_id
 from app.core.exceptions import NotFoundError
 from app.schemas.holiday import (
     HolidayCreateRequest,
@@ -10,6 +10,7 @@ from app.schemas.holiday import (
     HolidayResponse,
     HolidayUpdateRequest,
     SubsidyStandardResponse,
+    SubsidyStandardUpdateRequest,
 )
 from app.schemas.response import ApiResponse, ok
 from app.services.holiday import (
@@ -20,7 +21,9 @@ from app.services.holiday import (
     import_holidays,
     list_holidays,
     update_holiday,
+    update_subsidy_standard,
 )
+from app.models.user import SysUser
 
 router = APIRouter(prefix="/holidays", tags=["holidays"])
 
@@ -37,16 +40,34 @@ def get_holidays(
 
 @router.get("/standard", response_model=ApiResponse[SubsidyStandardResponse])
 def get_standard(
-    _perm: None = Depends(RequirePermission("holiday:standard:view")),
+    request: Request,
+    db: Session = Depends(get_db),
+    user: SysUser = Depends(RequirePermission("holiday:standard:manage")),
 ) -> ApiResponse[SubsidyStandardResponse]:
-    return ok(SubsidyStandardResponse(**get_subsidy_standard()))
+    standard = get_subsidy_standard(db, resolve_current_room_id(request, db, user))
+    db.commit()
+    return ok(SubsidyStandardResponse(**standard))
+
+
+@router.put("/standard", response_model=ApiResponse[SubsidyStandardResponse])
+def update_standard(
+    body: SubsidyStandardUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: SysUser = Depends(RequirePermission("holiday:standard:manage")),
+) -> ApiResponse[SubsidyStandardResponse]:
+    standard = update_subsidy_standard(
+        db, resolve_current_room_id(request, db, user), body.model_dump(),
+    )
+    db.commit()
+    return ok(SubsidyStandardResponse(**standard))
 
 
 @router.post("", response_model=ApiResponse[HolidayResponse])
 def create_holiday_endpoint(
     body: HolidayCreateRequest,
     db: Session = Depends(get_db),
-    _perm: None = Depends(RequirePermission("holiday:standard:view")),
+    _perm: None = Depends(RequirePermission("holiday:global:manage")),
 ) -> ApiResponse[HolidayResponse]:
     holiday = create_holiday(
         db, body.holiday_date, body.holiday_name,
@@ -60,7 +81,7 @@ def create_holiday_endpoint(
 def import_holidays_endpoint(
     body: HolidayImportRequest,
     db: Session = Depends(get_db),
-    _perm: None = Depends(RequirePermission("holiday:standard:view")),
+    _perm: None = Depends(RequirePermission("holiday:global:manage")),
 ) -> ApiResponse[HolidayImportResponse]:
     created, skipped, skipped_dates = import_holidays(
         db,
@@ -76,7 +97,7 @@ def import_holidays_endpoint(
 def get_holiday_endpoint(
     holiday_id: int,
     db: Session = Depends(get_db),
-    _perm: None = Depends(RequirePermission("holiday:standard:view")),
+    _perm: None = Depends(RequirePermission("holiday:global:manage")),
 ) -> ApiResponse[HolidayResponse]:
     holiday = get_holiday(db, holiday_id)
     if holiday is None:
@@ -89,7 +110,7 @@ def update_holiday_endpoint(
     holiday_id: int,
     body: HolidayUpdateRequest,
     db: Session = Depends(get_db),
-    _perm: None = Depends(RequirePermission("holiday:standard:view")),
+    _perm: None = Depends(RequirePermission("holiday:global:manage")),
 ) -> ApiResponse[HolidayResponse]:
     holiday = update_holiday(
         db, holiday_id,
@@ -106,7 +127,7 @@ def update_holiday_endpoint(
 def delete_holiday_endpoint(
     holiday_id: int,
     db: Session = Depends(get_db),
-    _perm: None = Depends(RequirePermission("holiday:standard:view")),
+    _perm: None = Depends(RequirePermission("holiday:global:manage")),
 ) -> ApiResponse[None]:
     delete_holiday(db, holiday_id)
     db.commit()

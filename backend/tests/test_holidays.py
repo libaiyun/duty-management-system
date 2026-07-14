@@ -1,7 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from app.models.holiday import HolidayCalendar
+from app.models.holiday import HolidayCalendar, RefundStandard
+from app.models.organization import OrgUnit
+from app.models.person import Person
 from app.models.user import SysPermission, SysRole
 from app.services.auth import create_user
 
@@ -15,11 +17,22 @@ def _login(api_client: TestClient, db_session, username: str, password: str) -> 
 
 
 def _create_admin(api_client: TestClient, db_session) -> tuple[int, str]:
+    room = OrgUnit(code="room-1", name="测试机房", type="room")
+    db_session.add(room)
+    db_session.flush()
+    person = Person(code="P001", name="管理员", person_type="director", org_unit_id=room.id)
+    db_session.add(person)
+    db_session.flush()
     user = create_user(db_session, "admin", "password123", "管理员")
-    perm = SysPermission(code="holiday:standard:view", name="View Holiday", type="api")
+    user.person_id = person.id
+    permissions = [
+        SysPermission(code="holiday:standard:view", name="View Holiday", type="api"),
+        SysPermission(code="holiday:standard:manage", name="Manage Standard", type="api"),
+        SysPermission(code="holiday:global:manage", name="Manage Holiday", type="api"),
+    ]
     role = SysRole(code="admin-role", name="Admin")
-    role.permissions.append(perm)
-    db_session.add_all([perm, role])
+    role.permissions.extend(permissions)
+    db_session.add_all([*permissions, role])
     user.roles.append(role)
     db_session.commit()
     token = _login(api_client, db_session, "admin", "password123")
@@ -206,6 +219,28 @@ class TestHolidayApi:
         assert data["meal_refund_night_to_middle"] == 4
         assert data["holiday_overtime"] == 150
         assert data["holiday_overtime_refund_night_to_middle"] == 56
+        standard = db_session.query(RefundStandard).one()
+        assert standard.org_unit_id is not None
+
+    def test_update_standard(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        response = api_client.put(
+            "/api/v1/holidays/standard",
+            json={
+                "early_meal": 11,
+                "middle_meal": 12,
+                "night_meal": 15,
+                "meal_refund_night_to_middle": 5,
+                "holiday_overtime": 160,
+                "holiday_overtime_refund_night_to_middle": 60,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["data"]["night_meal"] == 15
+        standard = db_session.query(RefundStandard).one()
+        assert float(standard.holiday_overtime) == 160
 
     def test_requires_permission(self, api_client: TestClient, db_session) -> None:
         create_user(db_session, "worker", "pass", "普通用户")

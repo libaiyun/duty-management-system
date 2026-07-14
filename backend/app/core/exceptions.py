@@ -70,3 +70,12 @@ class BusinessRuleError(AppException):
             code="BUSINESS_RULE_FAILED",
             message=message,
         )
+
+
+class CurrentRoomRequiredError(AppException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=HTTPStatus.UNPROCESSABLE_ENTITY,
+            code="ADMIN_NO_ROOM_SELECTED",
+            message="请在顶部选择机房后再操作。",
+        )

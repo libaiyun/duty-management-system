@@ -30,5 +30,7 @@ class PersonResponse(BaseModel):
     participate_schedule: bool
     status: str
     remark: str | None = None
+    account_bound: bool
+    account_username: str | None = None
 
     model_config = {"from_attributes": True}

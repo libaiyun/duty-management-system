@@ -1,8 +1,11 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app.models.organization import OrgUnit
+from app.models.person import Person
 from app.models.user import SysPermission, SysRole
-from app.services.auth import create_user
+from app.core.role_matrix import CANONICAL_ROLE_CODES
+from app.services.auth import create_user, seed_role_matrix
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -72,9 +75,8 @@ class TestUserApi:
 
     def test_assign_user_roles(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
-        role = SysRole(code="test-role", name="Test Role")
-        db_session.add(role)
-        db_session.commit()
+        seed_role_matrix(db_session)
+        role = db_session.query(SysRole).filter_by(code="duty_operator").one()
 
         resp = api_client.post(
             "/api/v1/users",
@@ -98,9 +100,40 @@ class TestUserApi:
         resp = api_client.get("/api/v1/users", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 403
 
+    def test_binding_persons_lists_all_rooms_without_current_room(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room_a = OrgUnit(code="binding-room-a", name="绑定机房A", type="room")
+        room_b = OrgUnit(code="binding-room-b", name="绑定机房B", type="room")
+        db_session.add_all([room_a, room_b])
+        db_session.flush()
+        db_session.add_all([
+            Person(code="BIND-A", name="甲", person_type="duty_operator", org_unit_id=room_a.id),
+            Person(code="BIND-B", name="乙", person_type="duty_operator", org_unit_id=room_b.id),
+        ])
+        db_session.commit()
+
+        resp = api_client.get("/api/v1/users/persons", headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 200
+        assert {person["code"] for person in resp.json()["data"]} == {"BIND-A", "BIND-B"}
+
+    def test_binding_persons_requires_system_user_permission(self, api_client: TestClient, db_session) -> None:
+        user = create_user(db_session, "person-manager", "password123", "人员管理员")
+        permission = SysPermission(code="person:manage:view", name="View Person", type="api")
+        role = SysRole(code="person-manager-role", name="Person Manager")
+        role.permissions.append(permission)
+        db_session.add_all([permission, role])
+        user.roles.append(role)
+        db_session.commit()
+        token = _login(api_client, db_session, "person-manager", "password123")
+
+        resp = api_client.get("/api/v1/users/persons", headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 403
+
 
 class TestRoleApi:
-    def test_create_role(self, api_client: TestClient, db_session) -> None:
+    def test_create_role_is_rejected_for_fixed_matrix(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
 
         resp = api_client.post(
@@ -108,17 +141,15 @@ class TestRoleApi:
             json={"code": "viewer", "name": "查看者", "remark": "只读"},
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 200
-        data = resp.json()["data"]
-        assert data["code"] == "viewer"
-        assert data["name"] == "查看者"
+        assert resp.status_code == 403
 
     def test_list_roles(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
+        seed_role_matrix(db_session)
 
         resp = api_client.get("/api/v1/roles", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
-        assert len(resp.json()["data"]) == 1
+        assert {role["code"] for role in resp.json()["data"]} == CANONICAL_ROLE_CODES
 
     def test_get_permissions(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)

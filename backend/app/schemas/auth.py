@@ -22,6 +22,10 @@ class UserMeResponse(BaseModel):
     display_name: str
     status: str
     permissions: list[str] = Field(default_factory=list)
+    person_id: int | None = None
+    room_id: int | None = None
+    room_name: str | None = None
+    can_switch_room: bool = False
 
 
 class ChangePasswordRequest(BaseModel):

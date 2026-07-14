@@ -4,10 +4,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError, StateConflictError
-from app.models.holiday import HolidayCalendar
+from app.models.holiday import HolidayCalendar, RefundStandard
 
-# 首期固定业务标准（总体设计 §12.2），首期只读展示
-FIXED_SUBSIDY_STANDARD = {
+DEFAULT_SUBSIDY_STANDARD = {
     "early_meal": 10,
     "middle_meal": 10,
     "night_meal": 14,
@@ -115,5 +114,46 @@ def import_holidays(
     return created, len(skipped_dates), skipped_dates
 
 
-def get_subsidy_standard() -> dict[str, int]:
-    return dict(FIXED_SUBSIDY_STANDARD)
+def _standard_response(standard: RefundStandard) -> dict[str, float]:
+    return {
+        "early_meal": float(standard.meal_early),
+        "middle_meal": float(standard.meal_middle),
+        "night_meal": float(standard.meal_night),
+        "meal_refund_night_to_middle": float(standard.meal_refund),
+        "holiday_overtime": float(standard.holiday_overtime),
+        "holiday_overtime_refund_night_to_middle": float(standard.holiday_refund),
+    }
+
+
+def get_subsidy_standard(db: Session, org_unit_id: int) -> dict[str, float]:
+    standard = db.scalars(
+        select(RefundStandard).where(RefundStandard.org_unit_id == org_unit_id)
+    ).first()
+    if standard is None:
+        standard = RefundStandard(
+            org_unit_id=org_unit_id,
+            meal_early=DEFAULT_SUBSIDY_STANDARD["early_meal"],
+            meal_middle=DEFAULT_SUBSIDY_STANDARD["middle_meal"],
+            meal_night=DEFAULT_SUBSIDY_STANDARD["night_meal"],
+            meal_refund=DEFAULT_SUBSIDY_STANDARD["meal_refund_night_to_middle"],
+            holiday_overtime=DEFAULT_SUBSIDY_STANDARD["holiday_overtime"],
+            holiday_refund=DEFAULT_SUBSIDY_STANDARD["holiday_overtime_refund_night_to_middle"],
+        )
+        db.add(standard)
+        db.flush()
+    return _standard_response(standard)
+
+
+def update_subsidy_standard(db: Session, org_unit_id: int, values: dict[str, float]) -> dict[str, float]:
+    get_subsidy_standard(db, org_unit_id)
+    standard = db.scalars(
+        select(RefundStandard).where(RefundStandard.org_unit_id == org_unit_id)
+    ).one()
+    standard.meal_early = values["early_meal"]
+    standard.meal_middle = values["middle_meal"]
+    standard.meal_night = values["night_meal"]
+    standard.meal_refund = values["meal_refund_night_to_middle"]
+    standard.holiday_overtime = values["holiday_overtime"]
+    standard.holiday_refund = values["holiday_overtime_refund_night_to_middle"]
+    db.flush()
+    return _standard_response(standard)

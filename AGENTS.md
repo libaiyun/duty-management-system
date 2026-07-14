@@ -14,26 +14,28 @@ Docker Compose 部署。
 * `docs/design/02-原型设计.md`
 * `docs/design/03-总体设计.md`
 * `docs/design/04-开发实施计划.md`
+* `docs/design/06-设计修订.md`
 
 如上述文档之间存在冲突，优先级如下：
 
-1. 已确认的需求分析
-2. 已确认的原型设计
-3. 已确认的总体设计
-4. 开发实施计划
+1. 设计修订
+2. 已确认的需求分析
+3. 已确认的原型设计
+4. 已确认的总体设计
+5. 开发实施计划
 
 如果仍然无法判断，不要自行扩大需求，停下来然后提问。
 
 ## 开发流程（TDD）
 
-1. 先写测试，验证测试失败（Red）
+1. 先写或补测试，验证测试失败（Red）
 2. 编写最小实现，让测试通过（Green）
 
 ### 测试命令
 
 | 端     | 命令                                      |
 | ------ | ----------------------------------------- |
-| 后端   | `docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm --no-deps backend pytest`（依赖 pyproject.toml 配置）       |
+| 后端   | `docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm --no-deps backend pytest backend/tests/`（依赖 pyproject.toml 配置）       |
 | 前端   | `npm --prefix frontend run test`          |
 
 ### 约定

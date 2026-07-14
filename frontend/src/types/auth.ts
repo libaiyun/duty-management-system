@@ -15,4 +15,8 @@ export interface UserMeResponse {
   display_name: string
   status: string
   permissions: string[]
+  person_id: number | null
+  room_id: number | null
+  room_name: string | null
+  can_switch_room: boolean
 }

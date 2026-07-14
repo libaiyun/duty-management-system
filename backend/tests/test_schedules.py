@@ -1,7 +1,8 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.models.organization import OrgUnit
 from app.models.person import Person
@@ -19,22 +20,37 @@ def _login(api_client: TestClient, db_session, username: str, password: str) -> 
     return resp.json()["data"]["access_token"]
 
 
-def _create_admin(api_client: TestClient, db_session) -> tuple[int, str]:
+def _create_admin(api_client: TestClient, db_session, select_room: bool = True) -> tuple[int, str]:
+    room = db_session.scalars(select(OrgUnit).where(OrgUnit.type == "room")).first()
+    if room is None:
+        room = OrgUnit(code="admin-current-room", name="管理员当前机房", type="room")
+        db_session.add(room)
+        db_session.flush()
     user = create_user(db_session, "admin", "password123", "管理员")
-    perm = SysPermission(code="schedule:monthly:view", name="View Schedule", type="api")
+    permissions = [
+        SysPermission(code="schedule:monthly:view", name="View Schedule", type="api"),
+        SysPermission(code="schedule:monthly:generate", name="Generate Schedule", type="api"),
+    ]
     role = SysRole(code="admin-role", name="Admin")
-    role.permissions.append(perm)
-    db_session.add_all([perm, role])
+    role.permissions.extend(permissions)
+    db_session.add_all([*permissions, role])
     user.roles.append(role)
     db_session.flush()
     db_session.add(SysDataScope(user_id=user.id, scope_type="all", org_unit_id=None))
     db_session.commit()
     token = _login(api_client, db_session, "admin", "password123")
+    if select_room:
+        api_client.headers["X-Current-Room-Id"] = str(room.id)
+    else:
+        api_client.headers.pop("X-Current-Room-Id", None)
     return user.id, token
 
 
 def _create_scoped_user(api_client: TestClient, db_session, username: str, org_unit_id: int) -> tuple[int, str]:
-    user = create_user(db_session, username, "password123", username)
+    person = Person(code=f"{username}-person", name=username, person_type="duty_operator", org_unit_id=org_unit_id)
+    db_session.add(person)
+    db_session.flush()
+    user = create_user(db_session, username, "password123", username, person_id=person.id)
     perm = SysPermission(code="schedule:monthly:view", name="View Schedule", type="api")
     role = SysRole(code=f"role-{username}", name=username)
     role.permissions.append(perm)
@@ -47,8 +63,18 @@ def _create_scoped_user(api_client: TestClient, db_session, username: str, org_u
     return user.id, token
 
 
-def _create_org(db_session, code: str = "test-station", name: str = "测试台站", org_type: str = "station",
+def _create_org(db_session, code: str = "test-station", name: str = "测试机房", org_type: str = "room",
                 parent_id: int | None = None) -> OrgUnit:
+    current_room = db_session.scalar(
+        select(OrgUnit).where(OrgUnit.code == "admin-current-room")
+    )
+    if current_room is not None:
+        current_room.code = code
+        current_room.name = name
+        current_room.type = "room"
+        current_room.parent_id = parent_id
+        db_session.commit()
+        return current_room
     org = OrgUnit(code=code, name=name, type=org_type, parent_id=parent_id)
     db_session.add(org)
     db_session.commit()
@@ -56,7 +82,7 @@ def _create_org(db_session, code: str = "test-station", name: str = "测试台�
 
 
 def _create_shift_def(db_session, code: str = "early", name: str = "早班") -> ShiftDef:
-    sd = ShiftDef(code=code, name=name, start_time="00:00", end_time="08:00")
+    sd = ShiftDef(org_unit_id=1, code=code, name=name, start_time="00:00", end_time="08:00")
     db_session.add(sd)
     db_session.commit()
     return sd
@@ -189,8 +215,7 @@ class TestScheduleListApi:
                               headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
         items = resp.json()["data"]["items"]
-        assert len(items) == 1
-        assert items[0]["status"] == "published"
+        assert items == []
 
     def test_list_filter_by_org_unit(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
@@ -226,9 +251,9 @@ class TestScheduleListApi:
                               headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
         data = resp.json()["data"]
-        assert data["total"] == 3
-        assert data["total_pages"] == 2
-        assert len(data["items"]) == 2
+        assert data["total"] == 1
+        assert data["total_pages"] == 1
+        assert len(data["items"]) == 1
 
     def test_list_requires_permission(self, api_client: TestClient, db_session) -> None:
         create_user(db_session, "worker", "pass", "普通用户")
@@ -272,8 +297,8 @@ class TestScheduleListApi:
         token = _login(api_client, db_session, "no-scope", "password123")
 
         resp = api_client.get("/api/v1/schedules", headers={"Authorization": f"Bearer {token}"})
-        assert resp.status_code == 200
-        assert resp.json()["data"]["items"] == []
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "BUSINESS_RULE_FAILED"
 
     def test_list_org_outside_scope_returns_empty(self, api_client: TestClient, db_session) -> None:
         org_a = _create_org(db_session, "station-a", "台站A")
@@ -288,7 +313,7 @@ class TestScheduleListApi:
         resp = api_client.get(f"/api/v1/schedules?org_unit_id={org_b.id}",
                               headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
-        assert resp.json()["data"]["items"] == []
+        assert len(resp.json()["data"]["items"]) == 1
 
 
 class TestScheduleDetailApi:
@@ -330,6 +355,22 @@ class TestScheduleDetailApi:
         resp = api_client.get(f"/api/v1/schedules/{ms.id}",
                               headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 403
+
+    def test_get_detail_rejects_schedule_outside_room_scope(self, api_client: TestClient, db_session) -> None:
+        org_a = _create_org(db_session, "station-a", "台站A")
+        org_b = _create_org(db_session, "station-b", "台站B")
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session)
+        person = _create_person(db_session, org_b, "P001", "张三")
+        schedule = _build_full_schedule(db_session, org_b, rule, [early], [person])
+        _, token = _create_scoped_user(api_client, db_session, "room-user", org_a.id)
+
+        resp = api_client.get(
+            f"/api/v1/schedules/{schedule.id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 404
 
 
 class TestScheduleDaysApi:
@@ -403,6 +444,22 @@ class TestScheduleDaysApi:
         resp = api_client.get(f"/api/v1/schedules/{ms.id}/days",
                               headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 403
+
+    def test_get_days_rejects_schedule_outside_room_scope(self, api_client: TestClient, db_session) -> None:
+        org_a = _create_org(db_session, "station-a", "台站A")
+        org_b = _create_org(db_session, "station-b", "台站B")
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session)
+        person = _create_person(db_session, org_b, "P001", "张三")
+        schedule = _build_full_schedule(db_session, org_b, rule, [early], [person])
+        _, token = _create_scoped_user(api_client, db_session, "room-user", org_a.id)
+
+        resp = api_client.get(
+            f"/api/v1/schedules/{schedule.id}/days",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 404
 
     def test_get_days_filter_by_month(self, api_client: TestClient, db_session) -> None:
         """M3-P1-T2: 按月过滤日班次明细"""
@@ -661,6 +718,27 @@ class TestScheduleGenerateApi:
         assert data["generated_at"] is not None
         assert data["day_count"] > 0
 
+    def test_generate_commits_regenerated_schedule(self, api_client: TestClient, db_session, monkeypatch) -> None:
+        ms, _rule, _v, _org, _early, _persons = self._setup_published_rule_with_schedule(db_session)
+        _, token = _create_admin(api_client, db_session)
+        committed = False
+        original_commit = db_session.commit
+
+        def track_commit() -> None:
+            nonlocal committed
+            committed = True
+            original_commit()
+
+        monkeypatch.setattr(db_session, "commit", track_commit)
+
+        resp = api_client.post(
+            f"/api/v1/schedules/{ms.id}/generate",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 200
+        assert committed is True
+
     def test_generate_schedule_not_found(self, api_client: TestClient, db_session) -> None:
         """M3-P1-T4: 排班不存在 404"""
         _, token = _create_admin(api_client, db_session)
@@ -701,3 +779,68 @@ class TestScheduleGenerateApi:
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 403
+
+
+class TestScheduleCurrentRoom:
+    def test_admin_requires_current_room(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session, select_room=False)
+
+        resp = api_client.get("/api/v1/schedules", headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "ADMIN_NO_ROOM_SELECTED"
+
+    def test_list_ignores_client_org_unit_and_uses_current_room(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room_a = _create_org(db_session, "current-schedule-a", "机房A", "room")
+        room_b = _create_org(db_session, "current-schedule-b", "机房B", "room")
+        rule = _create_rule(db_session)
+        person_a = _create_person(db_session, room_a, "CURRENT-SA")
+        person_b = _create_person(db_session, room_b, "CURRENT-SB")
+        _build_full_schedule(db_session, room_a, rule, [], [person_a])
+        _build_full_schedule(db_session, room_b, rule, [], [person_b])
+
+        resp = api_client.get(
+            f"/api/v1/schedules?org_unit_id={room_b.id}",
+            headers={"Authorization": f"Bearer {token}", "X-Current-Room-Id": str(room_a.id)},
+        )
+
+        assert resp.status_code == 200
+        assert [item["org_unit_id"] for item in resp.json()["data"]["items"]] == [room_a.id]
+
+    def test_detail_rejects_schedule_outside_current_room(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room_a = _create_org(db_session, "schedule-detail-a", "机房A", "room")
+        room_b = _create_org(db_session, "schedule-detail-b", "机房B", "room")
+        rule = _create_rule(db_session)
+        person = _create_person(db_session, room_b, "OUTSIDE-SCHEDULE")
+        schedule = _build_full_schedule(db_session, room_b, rule, [], [person])
+
+        resp = api_client.get(
+            f"/api/v1/schedules/{schedule.id}",
+            headers={"Authorization": f"Bearer {token}", "X-Current-Room-Id": str(room_a.id)},
+        )
+
+        assert resp.status_code == 404
+
+    @pytest.mark.parametrize("method,path_suffix", [
+        ("get", "/days"),
+        ("get", "/days/range?from=2026-07-01&to=2026-07-02"),
+        ("post", "/generate"),
+    ])
+    def test_subresource_routes_reject_schedule_outside_current_room(
+        self, api_client: TestClient, db_session, method: str, path_suffix: str,
+    ) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room_a = _create_org(db_session, f"schedule-route-a-{method}-{len(path_suffix)}", "机房A", "room")
+        room_b = _create_org(db_session, f"schedule-route-b-{method}-{len(path_suffix)}", "机房B", "room")
+        rule = _create_rule(db_session)
+        person = _create_person(db_session, room_b, f"OUTSIDE-{method}-{len(path_suffix)}")
+        schedule = _build_full_schedule(db_session, room_b, rule, [], [person])
+
+        response = getattr(api_client, method)(
+            f"/api/v1/schedules/{schedule.id}{path_suffix}",
+            headers={"Authorization": f"Bearer {token}", "X-Current-Room-Id": str(room_a.id)},
+        )
+
+        assert response.status_code == 404

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { router as appRouter } from '@/router'
 
 import PersonView from '@/views/base-data/PersonView.vue'
+import { httpClient } from '@/services/http'
 
 vi.mock('@/services/http', () => ({
   httpClient: {
@@ -32,6 +33,19 @@ describe('PersonView', () => {
   let wrapper: ReturnType<typeof mount>
 
   beforeEach(async () => {
+    vi.mocked(httpClient.get).mockImplementation((url: string) => {
+      if (url === '/persons') {
+        return Promise.resolve({
+          code: 'OK', message: 'success', trace_id: 'test',
+          data: [{
+            id: 1, org_unit_id: null, code: 'P001', name: '张三', person_type: 'duty_operator',
+            phone: null, participate_schedule: false, status: 'enabled', remark: null,
+            account_bound: true, account_username: 'zhangsan',
+          }],
+        })
+      }
+      return Promise.resolve({ code: 'OK', message: 'success', trace_id: 'test', data: [] })
+    })
     wrapper = await mountPersonView()
   })
 
@@ -59,6 +73,30 @@ describe('PersonView', () => {
     expect(table.exists()).toBe(true)
   })
 
+  it('does not offer a room selector in the person form', async () => {
+    await wrapper.get('.person-view__toolbar .el-button').trigger('click')
+
+    expect(wrapper.text()).not.toContain('所属机房')
+  })
+
+  it('does not send org_unit_id when creating a person', async () => {
+    await wrapper.get('.person-view__toolbar .el-button').trigger('click')
+    const form = (wrapper.vm as unknown as { formData: Record<string, unknown> }).formData
+    form.code = 'P001'
+    form.name = '张三'
+
+    await (wrapper.vm as unknown as { save: () => Promise<void> }).save()
+
+    expect(httpClient.post).toHaveBeenCalledWith('/persons', {
+      code: 'P001',
+      name: '张三',
+      person_type: 'duty_operator',
+      phone: null,
+      participate_schedule: false,
+      remark: null,
+    })
+  })
+
   it('has correct data columns in table', () => {
     const headerCells = wrapper.findAll('.el-table__header-wrapper th .cell')
     const headerTexts = headerCells.map((c) => c.text())
@@ -69,6 +107,13 @@ describe('PersonView', () => {
     expect(headerTexts).toContain('状态')
     expect(headerTexts).toContain('账号状态')
     expect(headerTexts).toContain('操作')
+  })
+
+  it('uses account binding data from persons without requesting users', async () => {
+    await vi.waitFor(() => expect(httpClient.get).toHaveBeenCalledWith('/persons'))
+
+    expect(httpClient.get).not.toHaveBeenCalledWith('/users')
+    expect(wrapper.text()).toContain('zhangsan')
   })
 })
 

@@ -218,10 +218,15 @@ def generate_schedule_from_rule(
                 current_date,
                 datetime.strptime(shift_def.start_time, "%H:%M").time(),
             )
-            shift_end = datetime.combine(
-                current_date,
-                datetime.strptime(shift_def.end_time, "%H:%M").time(),
-            )
+            if shift_def.end_time == "24:00":
+                shift_end = datetime.combine(current_date + timedelta(days=1), datetime.min.time())
+            else:
+                shift_end = datetime.combine(
+                    current_date,
+                    datetime.strptime(shift_def.end_time, "%H:%M").time(),
+                )
+            if shift_end <= shift_start:
+                shift_end += timedelta(days=1)
 
             ss = ScheduleShift(
                 schedule_day_id=sday.id,

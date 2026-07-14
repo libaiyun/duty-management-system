@@ -35,7 +35,11 @@ describe('useAuthStore', () => {
     vi.spyOn(httpClient, 'get').mockResolvedValueOnce({
       code: 'OK',
       message: 'success',
-      data: { id: 1, username: 'admin', display_name: '管理员', status: 'enabled', permissions: ['system:user:manage'] },
+      data: {
+        id: 1, username: 'admin', display_name: '管理员', status: 'enabled',
+        permissions: ['system:user:manage'], person_id: 10, room_id: 20,
+        room_name: '发射机房', can_switch_room: false,
+      },
       trace_id: '',
     })
 
@@ -45,6 +49,9 @@ describe('useAuthStore', () => {
     expect(store.accessToken).toBe('at')
     expect(store.refreshToken).toBe('rt')
     expect(store.displayName).toBe('管理员')
+    expect(store.personId).toBe(10)
+    expect(store.roomId).toBe(20)
+    expect(store.roomName).toBe('发射机房')
     expect(localStorage.getItem(TOKEN_KEY)).toBe('at')
     expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('rt')
     expect(localStorage.getItem(USER_KEY)).toBe('管理员')

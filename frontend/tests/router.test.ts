@@ -9,19 +9,10 @@ describe('router', () => {
     expect(route?.meta.title).toBe('工作台')
   })
 
-  it('defines nested routes for my-duty', () => {
-    const parent = router.getRoutes().find((item) => item.name === 'my-duty')
-    expect(parent?.path).toBe('/my-duty')
-    expect(parent?.children).toBeDefined()
-
-    const schedule = parent?.children?.find((c) => c.name === 'my-schedule')
-    expect(schedule?.path).toBe('/my-duty/schedule')
-    expect(schedule?.meta?.title).toBe('我的排班')
-  })
-
-  it('parent routes redirect to first child', () => {
-    const route = router.getRoutes().find((item) => item.name === 'my-duty')
-    expect(route?.redirect).toBe('/my-duty/schedule')
+  it('defines the revised flat schedule-table route', () => {
+    const route = router.getRoutes().find((item) => item.name === 'schedule-table')
+    expect(route?.path).toBe('/schedule-mgmt/table')
+    expect(route?.meta.title).toBe('排班表')
   })
 
   it('all leaf routes have a component', () => {

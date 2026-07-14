@@ -3,6 +3,8 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.models.user import SysDataScope, SysPermission, SysRole, SysUser
+from app.models.organization import OrgUnit
+from app.models.person import Person
 from app.services.auth import (
     DataScope,
     create_user,
@@ -100,7 +102,14 @@ def test_me_requires_auth(api_client: TestClient) -> None:
 
 
 def test_me_returns_user_info(api_client: TestClient, db_session) -> None:
-    create_user(db_session, "admin", "password123", "管理员")
+    room = OrgUnit(code="room-1", name="发射机房", type="room")
+    db_session.add(room)
+    db_session.flush()
+    person = Person(code="P001", name="张三", person_type="duty_operator", org_unit_id=room.id)
+    db_session.add(person)
+    db_session.flush()
+    user = create_user(db_session, "admin", "password123", "管理员")
+    user.person_id = person.id
     db_session.commit()
 
     login_resp = api_client.post("/api/v1/auth/login", json={"username": "admin", "password": "password123"})
@@ -118,6 +127,10 @@ def test_me_returns_user_info(api_client: TestClient, db_session) -> None:
     assert data["data"]["display_name"] == "管理员"
     assert data["data"]["status"] == "enabled"
     assert "permissions" in data["data"]
+    assert data["data"]["person_id"] == person.id
+    assert data["data"]["room_id"] == room.id
+    assert data["data"]["room_name"] == "发射机房"
+    assert data["data"]["can_switch_room"] is False
 
 
 def test_me_with_invalid_token(api_client: TestClient) -> None:

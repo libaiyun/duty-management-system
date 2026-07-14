@@ -11,66 +11,18 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.models.user import SysDataScope, SysPermission, SysRole
-from app.services.auth import create_user
-
-ALL_PERMISSION_CODES = (
-    # 与 frontend/src/types/permission.ts PERMISSION_CODES 保持同步
-    "duty:schedule:view_self",
-    "duty:swap:view_self",
-    "duty:leave:view_self",
-    "duty:cover:view_self",
-    "approval:task:view_todo",
-    "approval:record:view_done",
-    "schedule:monthly:view",
-    "schedule:detail:view",
-    "duty:actual:view",
-    "leave:record:view",
-    "cover:assignment:view",
-    "refund:batch:calculate",
-    "refund:detail:view",
-    "attendance:monthly:view",
-    "export:task:view",
-    "org:unit:view",
-    "person:manage:view",
-    "shift:rule:view",
-    "holiday:standard:view",
-    "system:user:manage",
-    "system:log:view",
-    "system:backup:view",
-)
-
-
-def _seed_permissions(db: Session) -> None:
-    existing = {row[0] for row in db.query(SysPermission.code).all()}
-    for code in ALL_PERMISSION_CODES:
-        if code not in existing:
-            db.add(SysPermission(code=code, name=code, type="api"))
-    db.flush()
-
-
-def _get_or_create_admin_role(db: Session) -> SysRole:
-    role = db.query(SysRole).filter(SysRole.code == "super-admin").first()
-    if role is None:
-        role = SysRole(code="super-admin", name="超级管理员", remark="拥有所有权限")
-        db.add(role)
-        db.flush()
-    assert role is not None
-    all_perms: list[SysPermission] = db.query(SysPermission).all()
-    role.permissions = all_perms  # type: ignore[assignment]
-    db.flush()
-    return role
+from app.models.user import SysRole
+from app.services.auth import create_user, seed_role_matrix
 
 
 def cmd_create_admin(args: argparse.Namespace) -> None:
     db = SessionLocal()
     try:
-        _seed_permissions(db)
-        role = _get_or_create_admin_role(db)
+        seed_role_matrix(db)
+        role = db.query(SysRole).filter(SysRole.code == "system_admin").one()
         user = create_user(db, args.username, args.password, args.display_name)
         user.roles.append(role)
         db.flush()
-        db.add(SysDataScope(user_id=user.id, scope_type="all", org_unit_id=None))
         db.commit()
         print(f"Admin user created: id={user.id}, username={user.username}")
     except IntegrityError:

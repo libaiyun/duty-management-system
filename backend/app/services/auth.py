@@ -2,9 +2,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import exists, inspect, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import Settings
+from app.core.role_matrix import CANONICAL_ROLE_CODES, ROLE_MATRIX, canonical_permissions
 from app.core.exceptions import BusinessRuleError, NotFoundError, StateConflictError, UnauthorizedError
 from app.core.security import (
     create_access_token,
@@ -111,10 +112,17 @@ def resolve_user_data_scopes(db: Session, user: SysUser) -> list[DataScope]:
         select(sys_user_role.c.role_id).where(sys_user_role.c.user_id == user.id)
     ).all()
 
-    stmt = select(SysDataScope).where(
-        (SysDataScope.user_id == user.id)
-        | (SysDataScope.role_id.in_(role_ids) if role_ids else False)
-    )
+    # Data scope is fixed by assigned canonical roles.  Legacy per-user rows
+    # must not widen a user's access. Retain persisted scope behavior only for
+    # users still on a pre-matrix role; the API cannot assign those roles.
+    role_codes = set(db.scalars(select(SysRole.code).where(SysRole.id.in_(role_ids))).all()) if role_ids else set()
+    if role_codes & CANONICAL_ROLE_CODES:
+        stmt = select(SysDataScope).where(SysDataScope.role_id.in_(role_ids))
+    else:
+        stmt = select(SysDataScope).where(
+            (SysDataScope.user_id == user.id)
+            | (SysDataScope.role_id.in_(role_ids) if role_ids else False)
+        )
 
     seen: set[tuple[str, int | None]] = set()
     result: list[DataScope] = []
@@ -131,24 +139,6 @@ def has_global_scope(scopes: list[DataScope]) -> bool:
     return any(s.scope_type == "all" for s in scopes)
 
 
-def _descendant_org_unit_ids(db: Session, root_ids: set[int]) -> set[int]:
-    """返回 root_ids 及其所有后代组织 id（含自身）。"""
-    rows = db.execute(select(OrgUnit.id, OrgUnit.parent_id)).all()
-    children_map: dict[int | None, list[int]] = {}
-    for uid, pid in rows:
-        children_map.setdefault(pid, []).append(uid)
-
-    result: set[int] = set(root_ids)
-    stack = list(root_ids)
-    while stack:
-        current = stack.pop()
-        for child in children_map.get(current, []):
-            if child not in result:
-                result.add(child)
-                stack.append(child)
-    return result
-
-
 def resolve_scoped_org_unit_ids(db: Session, user: SysUser) -> set[int] | None:
     """计算用户数据范围可见的 org_unit id 集合。
 
@@ -162,7 +152,7 @@ def resolve_scoped_org_unit_ids(db: Session, user: SysUser) -> set[int] | None:
 
     root_ids: set[int] = set()
     for scope in scopes:
-        if scope.scope_type in ("room", "station") and scope.org_unit_id is not None:
+        if scope.scope_type == "room" and scope.org_unit_id is not None:
             root_ids.add(scope.org_unit_id)
         elif scope.scope_type == "self":
             if user.person_id is not None:
@@ -172,7 +162,7 @@ def resolve_scoped_org_unit_ids(db: Session, user: SysUser) -> set[int] | None:
 
     if not root_ids:
         return set()
-    return _descendant_org_unit_ids(db, root_ids)
+    return root_ids
 
 
 def list_users(db: Session) -> list[SysUser]:
@@ -218,62 +208,43 @@ def assign_user_roles(db: Session, user_id: int, role_ids: list[int]) -> SysUser
     roles = db.scalars(select(SysRole).where(SysRole.id.in_(role_ids))).all() if role_ids else []
     if len(roles) != len(role_ids):
         raise NotFoundError(message="角色不存在")
+    if any(role.code not in CANONICAL_ROLE_CODES for role in roles):
+        raise BusinessRuleError(message="只能分配预置角色")
     user.roles = roles  # type: ignore[assignment]
     db.flush()
     return user
 
 
-def assign_user_data_scopes(db: Session, user_id: int, scopes: list[tuple[str, int | None]]) -> None:
-    user = db.get(SysUser, user_id)
-    if user is None:
-        raise NotFoundError(message="用户不存在")
-    scopes_to_delete = db.scalars(select(SysDataScope).where(SysDataScope.user_id == user_id)).all()
-    for s in scopes_to_delete:
-        db.delete(s)
-    for scope_type, org_unit_id in scopes:
-        db.add(SysDataScope(user_id=user_id, scope_type=scope_type, org_unit_id=org_unit_id))
-    db.flush()
-
-
 def list_roles(db: Session) -> list[SysRole]:
-    return list(db.scalars(select(SysRole).order_by(SysRole.id)).all())
-
-
-def create_role(db: Session, code: str, name: str, remark: str | None) -> SysRole:
-    role = SysRole(code=code, name=name, remark=remark)
-    db.add(role)
-    db.flush()
-    return role
-
-
-def update_role(db: Session, role_id: int, name: str | None, remark: str | None, status: str | None) -> SysRole:
-    role = db.get(SysRole, role_id)
-    if role is None:
-        raise NotFoundError(message="角色不存在")
-    if name is not None:
-        role.name = name
-    if remark is not None:
-        role.remark = remark
-    if status is not None:
-        role.status = status
-    db.flush()
-    return role
-
-
-def assign_role_permissions(db: Session, role_id: int, permission_ids: list[int]) -> SysRole:
-    role = db.get(SysRole, role_id)
-    if role is None:
-        raise NotFoundError(message="角色不存在")
-    perms = db.scalars(select(SysPermission).where(SysPermission.id.in_(permission_ids))).all() if permission_ids else []
-    if len(perms) != len(permission_ids):
-        raise NotFoundError(message="权限不存在")
-    role.permissions = perms  # type: ignore[assignment]
-    db.flush()
-    return role
+    return list(db.scalars(select(SysRole).where(SysRole.code.in_(CANONICAL_ROLE_CODES)).order_by(SysRole.id)).all())
 
 
 def list_permissions(db: Session) -> list[SysPermission]:
     return list(db.scalars(select(SysPermission).order_by(SysPermission.id)).all())
+
+
+def seed_role_matrix(db: Session) -> None:
+    """Create and repair the immutable role, grant, and scope records."""
+    permissions = {p.code: p for p in db.scalars(select(SysPermission)).all()}
+    for code in canonical_permissions(ROLE_MATRIX[-1]):
+        if code not in permissions:
+            permissions[code] = SysPermission(code=code, name=code, type="api")
+            db.add(permissions[code])
+    db.flush()
+    for definition in ROLE_MATRIX:
+        role = db.scalar(select(SysRole).where(SysRole.code == definition.code))
+        if role is None:
+            role = SysRole(code=definition.code, name=definition.name, remark="系统预置角色")
+            db.add(role)
+            db.flush()
+        role.name = definition.name
+        role.status = "enabled"
+        role.permissions = [permissions[code] for code in canonical_permissions(definition)]
+        scopes = db.scalars(select(SysDataScope).where(SysDataScope.role_id == role.id)).all()
+        for scope in scopes:
+            db.delete(scope)
+        db.add(SysDataScope(role_id=role.id, scope_type=definition.scope_type))
+    db.flush()
 
 
 def list_org_units(db: Session, org_unit_ids: set[int] | None = None) -> list[OrgUnit]:
@@ -372,7 +343,7 @@ def list_persons(
     org_unit_id: int | None = None,
     person_type: str | None = None,
 ) -> list[Person]:
-    stmt = select(Person)
+    stmt = select(Person).options(selectinload(Person.account))
     if org_unit_ids is not None:
         if not org_unit_ids:
             return []
@@ -448,36 +419,87 @@ def _times_overlap(
     start_a: str, end_a: str,
     start_b: str, end_b: str,
 ) -> bool:
-    """Check if two HH:MM time ranges overlap (no wrap-around)."""
+    """Check overlap between daily ranges, including ranges that cross midnight."""
     sa_h, sa_m = _parse_time(start_a)
     ea_h, ea_m = _parse_time(end_a)
     sb_h, sb_m = _parse_time(start_b)
     eb_h, eb_m = _parse_time(end_b)
-    a_start_min = sa_h * 60 + sa_m
-    a_end_min = ea_h * 60 + ea_m
-    b_start_min = sb_h * 60 + sb_m
-    b_end_min = eb_h * 60 + eb_m
-    return a_start_min < b_end_min and b_start_min < a_end_min
+    a_start = sa_h * 60 + sa_m
+    a_end = ea_h * 60 + ea_m
+    b_start = sb_h * 60 + sb_m
+    b_end = eb_h * 60 + eb_m
+
+    def intervals(start: int, end: int) -> list[tuple[int, int]]:
+        if start < end:
+            return [(start, end)]
+        return [(start, 1440), (0, end)]
+
+    a_intervals = intervals(a_start, a_end)
+    b_intervals = intervals(b_start, b_end)
+    return any(
+        interval_a_start < interval_b_end and interval_b_start < interval_a_end
+        for interval_a_start, interval_a_end in a_intervals
+        for interval_b_start, interval_b_end in b_intervals
+    )
 
 
-def list_shift_defs(db: Session) -> list[ShiftDef]:
-    return list(db.scalars(select(ShiftDef).order_by(ShiftDef.display_order, ShiftDef.id)).all())
+_DEFAULT_SHIFT_DEFS = (
+    ("early", "早班", "00:00", "08:00", 1),
+    ("middle", "中班", "08:00", "16:00", 2),
+    ("night", "晚班", "16:00", "24:00", 3),
+)
+
+
+def _ensure_default_shift_defs(db: Session, org_unit_id: int) -> None:
+    # Lock the room so concurrent first access cannot create duplicate defaults.
+    db.scalar(select(OrgUnit).where(OrgUnit.id == org_unit_id).with_for_update())
+    if db.scalar(select(ShiftDef.id).where(ShiftDef.org_unit_id == org_unit_id).limit(1)) is not None:
+        return
+    db.add_all([
+        ShiftDef(
+            org_unit_id=org_unit_id,
+            code=code,
+            name=name,
+            start_time=start_time,
+            end_time=end_time,
+            display_order=display_order,
+        )
+        for code, name, start_time, end_time, display_order in _DEFAULT_SHIFT_DEFS
+    ])
+    db.flush()
+
+
+def list_shift_defs(db: Session, org_unit_id: int) -> list[ShiftDef]:
+    _ensure_default_shift_defs(db, org_unit_id)
+    return list(db.scalars(
+        select(ShiftDef)
+        .where(ShiftDef.org_unit_id == org_unit_id)
+        .order_by(ShiftDef.display_order, ShiftDef.id)
+    ).all())
 
 
 def create_shift_def(
-    db: Session, code: str, name: str,
+    db: Session, org_unit_id: int, code: str, name: str,
     start_time: str, end_time: str,
     display_order: int = 0,
 ) -> ShiftDef:
-    existing = db.scalars(select(ShiftDef).where(ShiftDef.code == code)).first()
+    existing = db.scalars(
+        select(ShiftDef)
+        .where(ShiftDef.org_unit_id == org_unit_id)
+        .where(ShiftDef.code == code)
+    ).first()
     if existing:
         raise StateConflictError(message=f"班次编码 '{code}' 已存在")
-    overlaps = db.scalars(select(ShiftDef).where(ShiftDef.status == "enabled")).all()
+    overlaps = db.scalars(
+        select(ShiftDef)
+        .where(ShiftDef.org_unit_id == org_unit_id)
+        .where(ShiftDef.status == "enabled")
+    ).all()
     for s in overlaps:
         if _times_overlap(start_time, end_time, s.start_time, s.end_time):
             raise BusinessRuleError(message=f"班次时间与 '{s.name}' ({s.start_time}-{s.end_time}) 重叠")
     sd = ShiftDef(
-        code=code, name=name,
+        org_unit_id=org_unit_id, code=code, name=name,
         start_time=start_time, end_time=end_time,
         display_order=display_order,
     )
@@ -501,6 +523,7 @@ def update_shift_def(
     resolved_end = end_time if end_time is not None else sd.end_time
     overlap = db.scalars(
         select(ShiftDef).where(
+            ShiftDef.org_unit_id == sd.org_unit_id,
             ShiftDef.status == "enabled",
             ShiftDef.id != shift_id,
         )
@@ -535,9 +558,12 @@ def _validate_start_date(start_date_str: str) -> None:
 def _validate_cells(
     db: Session, rule: ShiftRule, days: list[dict],
 ) -> None:
-    enabled_defs = list(db.scalars(
-        select(ShiftDef).where(ShiftDef.status == "enabled").order_by(ShiftDef.display_order)
-    ).all())
+    enabled_stmt = select(ShiftDef).where(ShiftDef.status == "enabled")
+    if rule.org_unit_id is not None:
+        enabled_stmt = enabled_stmt.where(ShiftDef.org_unit_id == rule.org_unit_id)
+    enabled_defs = list(db.scalars(enabled_stmt.order_by(ShiftDef.display_order)).all())
+    if not enabled_defs:
+        raise BusinessRuleError(message="当前机房未配置班次定义，无法设置排班规则。")
     expected_def_ids = {sd.id for sd in enabled_defs}
 
     if not days:
@@ -561,13 +587,18 @@ def _validate_cells(
                 raise BusinessRuleError(
                     message=f"第 {day_no} 天班次 {sid} 需要 {persons_needed} 人，当前 {len(pids)} 人",
                 )
-            if rule.org_unit_id:
-                for pid in pids:
-                    person = db.get(Person, pid)
-                    if not person or person.org_unit_id != rule.org_unit_id:
-                        raise BusinessRuleError(
-                            message=f"第 {day_no} 天班次 {sid} 的人员 {pid} 不属于当前机房",
-                        )
+            if len(set(pids)) != len(pids):
+                raise BusinessRuleError(message=f"第 {day_no} 天班次 {sid} 的人员不能重复")
+            for pid in pids:
+                person = db.get(Person, pid)
+                if not person or person.org_unit_id != rule.org_unit_id:
+                    raise BusinessRuleError(
+                        message=f"第 {day_no} 天班次 {sid} 的人员 {pid} 不属于当前机房",
+                    )
+                if person.status != "enabled" or not person.participate_schedule or person.person_type != "duty_operator":
+                    raise BusinessRuleError(
+                        message=f"第 {day_no} 天班次 {sid} 的人员 {pid} 不符合排班条件",
+                    )
 
         missing = expected_def_ids - cell_shift_ids
         if missing:
@@ -583,12 +614,18 @@ def _validate_cells(
         )
 
 
-def list_shift_rules(db: Session) -> list[ShiftRule]:
-    return list(db.scalars(select(ShiftRule).order_by(ShiftRule.id)).all())
+def list_shift_rules(db: Session, org_unit_id: int | None = None) -> list[ShiftRule]:
+    stmt = select(ShiftRule).order_by(ShiftRule.id)
+    if org_unit_id is not None:
+        stmt = stmt.where(ShiftRule.org_unit_id == org_unit_id)
+    return list(db.scalars(stmt).all())
 
 
-def get_shift_rule(db: Session, rule_id: int) -> ShiftRule | None:
-    return db.get(ShiftRule, rule_id)
+def get_shift_rule(db: Session, rule_id: int, org_unit_id: int | None = None) -> ShiftRule | None:
+    stmt = select(ShiftRule).where(ShiftRule.id == rule_id)
+    if org_unit_id is not None:
+        stmt = stmt.where(ShiftRule.org_unit_id == org_unit_id)
+    return db.scalars(stmt).first()
 
 
 def _get_next_version_no(db: Session, rule_id: int) -> int:
@@ -658,6 +695,7 @@ def create_shift_rule(
     )
     db.add(rule)
     db.flush()
+    _validate_cells(db, rule, [])
     if days:
         _validate_cells(db, rule, days)
         _create_rule_version(db, rule, days, status="draft")
@@ -703,6 +741,7 @@ def update_shift_rule(
         rule.persons_per_cell = persons_per_cell
     if remark is not None:
         rule.remark = remark
+    _validate_cells(db, rule, [])
     if days is not None:
         if start_date is not None:
             _validate_start_date(rule.start_date)
@@ -710,6 +749,7 @@ def update_shift_rule(
             _validate_start_date(rule.start_date)
         _validate_cells(db, rule, days)
         _create_rule_version(db, rule, days, status="draft")
+        rule.status = "draft"
     db.flush()
     return rule
 
@@ -718,6 +758,7 @@ def delete_shift_rule(db: Session, rule_id: int) -> None:
     rule = db.get(ShiftRule, rule_id)
     if rule is None:
         raise NotFoundError(message="排班规则不存在")
+    _validate_cells(db, rule, [])
     if _rule_is_referenced(db, rule_id):
         raise StateConflictError(message="规则已被排班引用，不能删除")
     db.delete(rule)
@@ -738,6 +779,16 @@ def publish_shift_rule(db: Session, rule_id: int) -> ShiftRule:
         raise BusinessRuleError(message="规则没有保存版本，请先保存")
     if latest_version.status != "draft":
         raise StateConflictError(message="当前版本已发布，请先修改再重新发布")
+    _validate_cells(db, rule, [
+        {
+            "day_no": item.day_no,
+            "cells": [
+                {"shift_def_id": int(shift_def_id), "person_ids": person_ids}
+                for shift_def_id, person_ids in item.cell_persons.items()
+            ],
+        }
+        for item in latest_version.items
+    ])
     latest_version.status = "published"
     rule.status = "published"
     db.flush()

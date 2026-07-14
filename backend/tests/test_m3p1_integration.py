@@ -20,7 +20,7 @@ class TestEdgeCases:
         org = OrgUnit(code="ec_org", name="边界测试", type="room")
         p1 = Person(code="EC01", name="A", person_type="duty_operator", org_unit=org, participate_schedule=True)
         p2 = Person(code="EC02", name="B", person_type="duty_operator", org_unit=org, participate_schedule=True)
-        sd = ShiftDef(code="ec_shift", name="班次", start_time="00:00", end_time="08:00", display_order=1)
+        sd = ShiftDef(org_unit=org, code="ec_shift", name="班次", start_time="00:00", end_time="08:00", display_order=1)
         db_session.add_all([org, p1, p2, sd])
         db_session.commit()
         return org, [p1, p2], sd

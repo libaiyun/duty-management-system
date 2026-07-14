@@ -1,10 +1,10 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.api.deps import RequirePermission, get_db, get_page_params
+from app.api.deps import RequirePermission, get_db, get_page_params, resolve_current_room_id
 from app.core.exceptions import BusinessRuleError, NotFoundError
 from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
 from app.models.shift import ShiftRule, ShiftRuleVersion
@@ -17,7 +17,6 @@ from app.schemas.schedule import (
     ScheduleShiftPersonResponse,
     ScheduleShiftResponse,
 )
-from app.services.auth import resolve_scoped_org_unit_ids
 from app.services.schedule import (
     generate_schedule_from_rule,
     get_schedule,
@@ -100,19 +99,29 @@ def _build_day_response(day: ScheduleDay) -> ScheduleDayResponse:
     )
 
 
+def _get_scoped_schedule(db: Session, schedule_id: int, room_id: int) -> MonthlySchedule:
+    schedule = get_schedule(db, schedule_id)
+    if schedule is None:
+        raise NotFoundError(message="排班记录不存在")
+
+    if schedule.org_unit_id != room_id:
+        raise NotFoundError(message="排班记录不存在")
+    return schedule
+
+
 @router.get("", response_model=ApiResponse[PageResponse[ScheduleResponse]])
 def list_schedules_endpoint(
+    request: Request,
     paging: PageParams = Depends(get_page_params),
     org_unit_id: int | None = None,
     status: str | None = None,
     db: Session = Depends(get_db),
     user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
 ) -> ApiResponse[PageResponse[ScheduleResponse]]:
-    scoped_ids = resolve_scoped_org_unit_ids(db, user)
+    room_id = resolve_current_room_id(request, db, user)
     schedules, total = list_schedules(
         db,
-        org_unit_ids=scoped_ids,
-        org_unit_id=org_unit_id,
+        org_unit_id=room_id,
         status=status,
         offset=paging.offset,
         limit=paging.page_size,
@@ -124,26 +133,24 @@ def list_schedules_endpoint(
 @router.get("/{id}", response_model=ApiResponse[ScheduleResponse])
 def get_schedule_endpoint(
     id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    _perm: None = Depends(RequirePermission("schedule:monthly:view")),
+    user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
 ) -> ApiResponse[ScheduleResponse]:
-    schedule = get_schedule(db, id)
-    if schedule is None:
-        raise NotFoundError(message="排班记录不存在")
+    schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
     return ok(_build_schedule_response(schedule))
 
 
 @router.get("/{id}/days", response_model=ApiResponse[list[ScheduleDayResponse]])
 def get_schedule_days_endpoint(
     id: int,
+    request: Request,
     year: int | None = None,
     month: int | None = None,
     db: Session = Depends(get_db),
-    _perm: None = Depends(RequirePermission("schedule:monthly:view")),
+    user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
 ) -> ApiResponse[list[ScheduleDayResponse]]:
-    schedule = get_schedule(db, id)
-    if schedule is None:
-        raise NotFoundError(message="排班记录不存在")
+    schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
     if (year is None) != (month is None):
         raise BusinessRuleError(message="year 和 month 必须同时传入")
     days = get_schedule_days(db, id, year=year, month=month)
@@ -153,14 +160,13 @@ def get_schedule_days_endpoint(
 @router.get("/{id}/days/range", response_model=ApiResponse[list[ScheduleDayResponse]])
 def get_schedule_days_range_endpoint(
     id: int,
+    request: Request,
     from_date: date = Query(..., alias="from"),
     to_date: date = Query(..., alias="to"),
     db: Session = Depends(get_db),
-    _perm: None = Depends(RequirePermission("schedule:monthly:view")),
+    user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
 ) -> ApiResponse[list[ScheduleDayResponse]]:
-    schedule = get_schedule(db, id)
-    if schedule is None:
-        raise NotFoundError(message="排班记录不存在")
+    schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
     if from_date > to_date:
         raise BusinessRuleError(message="起始日期不能晚于结束日期")
     days = get_schedule_days_by_range(db, id, from_date=from_date, to_date=to_date)
@@ -170,12 +176,11 @@ def get_schedule_days_range_endpoint(
 @router.post("/{id}/generate", response_model=ApiResponse[ScheduleResponse])
 def generate_schedule_endpoint(
     id: int,
+    request: Request,
     db: Session = Depends(get_db),
-    _perm: None = Depends(RequirePermission("schedule:monthly:view")),
+    user: SysUser = Depends(RequirePermission("schedule:monthly:generate")),
 ) -> ApiResponse[ScheduleResponse]:
-    schedule = get_schedule(db, id)
-    if schedule is None:
-        raise NotFoundError(message="排班记录不存在")
+    schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
 
     rule = db.get(ShiftRule, schedule.rule_id)
     if rule is None or rule.status != "published":
@@ -192,5 +197,6 @@ def generate_schedule_endpoint(
         raise BusinessRuleError(message="规则没有已发布的版本")
 
     generate_schedule_from_rule(db, rule, latest_version)
+    db.commit()
     db.refresh(schedule)
     return ok(_build_schedule_response(schedule))

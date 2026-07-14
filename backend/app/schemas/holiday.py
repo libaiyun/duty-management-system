@@ -40,9 +40,18 @@ class HolidayImportResponse(BaseModel):
 
 
 class SubsidyStandardResponse(BaseModel):
-    early_meal: int
-    middle_meal: int
-    night_meal: int
-    meal_refund_night_to_middle: int
-    holiday_overtime: int
-    holiday_overtime_refund_night_to_middle: int
+    early_meal: float
+    middle_meal: float
+    night_meal: float
+    meal_refund_night_to_middle: float
+    holiday_overtime: float
+    holiday_overtime_refund_night_to_middle: float
+
+
+class SubsidyStandardUpdateRequest(BaseModel):
+    early_meal: float = Field(..., ge=0)
+    middle_meal: float = Field(..., ge=0)
+    night_meal: float = Field(..., ge=0)
+    meal_refund_night_to_middle: float = Field(..., ge=0)
+    holiday_overtime: float = Field(..., ge=0)
+    holiday_overtime_refund_night_to_middle: float = Field(..., ge=0)

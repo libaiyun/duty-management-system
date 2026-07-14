@@ -44,23 +44,6 @@
         </el-table>
       </el-tab-pane>
 
-      <el-tab-pane label="角色管理" name="roles">
-        <div class="account-role-view__toolbar">
-          <el-button type="primary" @click="openRoleCreateDialog()">新增角色</el-button>
-        </div>
-        <el-table :data="roles" v-loading="roleLoading" stripe>
-          <el-table-column prop="id" label="ID" width="60" />
-          <el-table-column prop="code" label="编码" />
-          <el-table-column prop="name" label="名称" />
-          <el-table-column prop="remark" label="备注" />
-          <el-table-column label="操作" width="200">
-            <template #default="{ row }">
-              <el-button size="small" @click="openRoleEditDialog(row)">编辑</el-button>
-              <el-button size="small" @click="openPermissionDialog(row)">权限</el-button>
-            </template>
-          </el-table-column>
-        </el-table>
-      </el-tab-pane>
     </el-tabs>
 
     <!-- User create/edit dialog -->
@@ -124,49 +107,6 @@
       </template>
     </el-dialog>
 
-    <!-- Role create/edit dialog -->
-    <el-dialog
-      v-model="roleFormVisible"
-      :title="editingRole ? '编辑角色' : '新增角色'"
-      width="460px"
-      @closed="resetRoleForm"
-    >
-      <el-form ref="roleFormRef" :model="roleForm" :rules="roleRules" label-position="top">
-        <el-form-item label="编码" prop="code">
-          <el-input v-model="roleForm.code" :disabled="!!editingRole" />
-        </el-form-item>
-        <el-form-item label="名称" prop="name">
-          <el-input v-model="roleForm.name" />
-        </el-form-item>
-        <el-form-item label="备注">
-          <el-input v-model="roleForm.remark" type="textarea" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="roleFormVisible = false">取消</el-button>
-        <el-button type="primary" :loading="roleSaving" @click="saveRole">保存</el-button>
-      </template>
-    </el-dialog>
-
-    <!-- Permission assign dialog -->
-    <el-dialog
-      v-model="permDialogVisible"
-      title="分配权限"
-      width="500px"
-    >
-      <el-checkbox-group v-model="selectedPermIds">
-        <el-checkbox
-          v-for="perm in permissions"
-          :key="perm.id"
-          :value="perm.id"
-          :label="`${perm.name} (${perm.code})`"
-        />
-      </el-checkbox-group>
-      <template #footer>
-        <el-button @click="permDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="permSaving" @click="saveRolePermissions">保存</el-button>
-      </template>
-    </el-dialog>
   </section>
 </template>
 
@@ -218,7 +158,6 @@ interface PermItem {
 const activeTab = ref('users')
 const users = ref<UserItem[]>([])
 const roles = ref<RoleItem[]>([])
-const permissions = ref<PermItem[]>([])
 const persons = ref<PersonBrief[]>([])
 const userLoading = ref(false)
 const roleLoading = ref(false)
@@ -235,35 +174,17 @@ const userRules: FormRules = {
   display_name: [{ required: true, message: '请输入姓名' }],
 }
 
-// Role form
-const roleFormVisible = ref(false)
-const editingRole = ref<RoleItem | null>(null)
-const roleSaving = ref(false)
-const roleFormRef = ref<FormInstance>()
-const roleForm = reactive({ code: '', name: '', remark: '' })
-const roleRules: FormRules = {
-  code: [{ required: true, message: '请输入编码' }],
-  name: [{ required: true, message: '请输入名称' }],
-}
-
 // Role assign
 const roleDialogVisible = ref(false)
 const roleAssignSaving = ref(false)
 const assignTargetUser = ref<UserItem | null>(null)
 const selectedRoleIds = ref<number[]>([])
 
-// Permission assign
-const permDialogVisible = ref(false)
-const permSaving = ref(false)
-const assignTargetRole = ref<RoleItem | null>(null)
-const selectedPermIds = ref<number[]>([])
-
 const route = useRoute()
 
 onMounted(() => {
   loadUsers()
   loadRoles()
-  loadPermissions()
   loadPersons().then(() => {
     const bindPersonId = route.query.bindPersonId
     if (bindPersonId) {
@@ -313,18 +234,10 @@ async function loadRoles() {
   }
 }
 
-async function loadPermissions() {
-  try {
-    const resp = await httpClient.get<PermItem[]>('/permissions')
-    permissions.value = resp.data
-  } catch {
-    // ignore
-  }
-}
 
 async function loadPersons() {
   try {
-    const resp = await httpClient.get<PersonBrief[]>('/persons')
+    const resp = await httpClient.get<PersonBrief[]>('/users/persons')
     persons.value = resp.data
   } catch {
     // ignore
@@ -424,85 +337,6 @@ async function saveUserRoles() {
   }
 }
 
-// ---- Role CRUD ----
-
-function openRoleCreateDialog() {
-  editingRole.value = null
-  resetRoleForm()
-  roleFormVisible.value = true
-}
-
-function openRoleEditDialog(role: RoleItem) {
-  editingRole.value = role
-  roleForm.code = role.code
-  roleForm.name = role.name
-  roleForm.remark = role.remark || ''
-  roleFormVisible.value = true
-}
-
-function resetRoleForm() {
-  roleForm.code = ''
-  roleForm.name = ''
-  roleForm.remark = ''
-  roleFormRef.value?.resetFields()
-}
-
-async function saveRole() {
-  const valid = await roleFormRef.value?.validate().catch(() => false)
-  if (!valid) return
-  roleSaving.value = true
-  try {
-    if (editingRole.value) {
-      await httpClient.put(`/roles/${editingRole.value.id}`, {
-        name: roleForm.name,
-        remark: roleForm.remark || null,
-      })
-      ElMessage.success('编辑成功')
-    } else {
-      await httpClient.post('/roles', {
-        code: roleForm.code,
-        name: roleForm.name,
-        remark: roleForm.remark || null,
-      })
-      ElMessage.success('创建成功')
-    }
-    roleFormVisible.value = false
-    await loadRoles()
-  } catch {
-    ElMessage.error('操作失败')
-  } finally {
-    roleSaving.value = false
-  }
-}
-
-// ---- Permission assignment ----
-
-async function openPermissionDialog(role: RoleItem) {
-  assignTargetRole.value = role
-  try {
-    const resp = await httpClient.get<RoleDetail>(`/roles/${role.id}`)
-    selectedPermIds.value = resp.data.permission_ids
-  } catch {
-    selectedPermIds.value = []
-  }
-  permDialogVisible.value = true
-}
-
-async function saveRolePermissions() {
-  if (!assignTargetRole.value) return
-  permSaving.value = true
-  try {
-    await httpClient.put(`/roles/${assignTargetRole.value.id}/permissions`, {
-      permission_ids: selectedPermIds.value,
-    })
-    ElMessage.success('权限分配成功')
-    permDialogVisible.value = false
-  } catch {
-    ElMessage.error('权限分配失败')
-  } finally {
-    permSaving.value = false
-  }
-}
 </script>
 
 <style scoped>

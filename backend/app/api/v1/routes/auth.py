@@ -8,6 +8,7 @@ from app.api.deps import RequirePermission, _get_settings, get_db
 from app.core.config import Settings
 from app.core.security import get_current_user
 from app.models.user import SysPermission, sys_role_permission, sys_user_role
+from app.models.person import Person
 from app.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
@@ -23,6 +24,8 @@ from app.services.auth import (
     issue_tokens,
     refresh_access_token,
     reset_user_password,
+    has_global_scope,
+    resolve_user_data_scopes,
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -68,12 +71,19 @@ def me(
         .join(sys_user_role, sys_role_permission.c.role_id == sys_user_role.c.role_id)
         .where(sys_user_role.c.user_id == user.id)
     ).all()
+    can_switch_room = has_global_scope(resolve_user_data_scopes(db, user))
+    person = db.get(Person, user.person_id) if user.person_id is not None else None
+    room = person.org_unit if person is not None else None
     return ok(UserMeResponse(
         id=user.id,
         username=user.username,
         display_name=user.display_name,
         status=user.status,
         permissions=list(perm_codes),
+        person_id=user.person_id,
+        room_id=room.id if room is not None and not can_switch_room else None,
+        room_name=room.name if room is not None and not can_switch_room else None,
+        can_switch_room=can_switch_room,
     ))
 
 

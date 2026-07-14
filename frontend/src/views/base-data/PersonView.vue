@@ -71,8 +71,8 @@
       </el-table-column>
       <el-table-column label="账号状态" width="120" align="center">
         <template #default="{ row }">
-          <el-tag v-if="userPersonMap.has(row.id)" type="success" size="small" effect="plain">
-            {{ userPersonMap.get(row.id) }}
+          <el-tag v-if="row.account_bound" type="success" size="small" effect="plain">
+            {{ row.account_username }}
           </el-tag>
           <el-tag v-else type="info" size="small" effect="plain">
             未绑定
@@ -114,16 +114,6 @@
               :key="value"
               :label="label"
               :value="value"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="所属机房" prop="org_unit_id">
-          <el-select v-model="formData.org_unit_id" placeholder="请选择机房" style="width: 100%" clearable>
-            <el-option
-              v-for="unit in orgUnitOptions"
-              :key="unit.id"
-              :label="orgUnitDisplayLabel(unit)"
-              :value="unit.id"
             />
           </el-select>
         </el-form-item>
@@ -170,6 +160,8 @@ interface PersonItem {
   participate_schedule: boolean
   status: string
   remark: string | null
+  account_bound: boolean
+  account_username: string | null
 }
 
 const PERSON_TYPE_LABELS: Record<string, string> = {
@@ -191,7 +183,6 @@ const loading = ref(false)
 const saving = ref(false)
 const persons = ref<PersonItem[]>([])
 const orgUnits = ref<OrgUnitItem[]>([])
-const userPersonMap = ref<Map<number, string>>(new Map())
 
 const filters = reactive({
   name: '',
@@ -206,10 +197,6 @@ const filteredPersons = computed(() => {
     if (filters.status && p.status !== filters.status) return false
     return true
   })
-})
-
-const orgUnitOptions = computed(() => {
-  return orgUnits.value.filter((u) => u.type === 'room' || u.type === 'station')
 })
 
 const orgUnitMap = computed(() => {
@@ -231,11 +218,6 @@ function orgUnitLabel(id: number | null): string {
   return unit.name
 }
 
-function orgUnitDisplayLabel(unit: OrgUnitItem): string {
-  const label = orgUnitLabel(unit.id)
-  return label || unit.name
-}
-
 // Form
 const formVisible = ref(false)
 const editingPerson = ref<PersonItem | null>(null)
@@ -244,7 +226,6 @@ const formData = reactive({
   code: '',
   name: '',
   person_type: 'duty_operator',
-  org_unit_id: null as number | null,
   phone: '',
   participate_schedule: false,
   remark: '',
@@ -256,7 +237,7 @@ const formRules: FormRules = {
 }
 
 onMounted(async () => {
-  await Promise.all([loadOrgUnits(), loadPersons(), loadUsers()])
+  await Promise.all([loadOrgUnits(), loadPersons()])
 })
 
 async function loadOrgUnits() {
@@ -280,27 +261,6 @@ async function loadPersons() {
   }
 }
 
-interface UserBrief {
-  id: number
-  person_id: number | null
-  username: string
-}
-
-async function loadUsers() {
-  try {
-    const resp = await httpClient.get<UserBrief[]>('/users')
-    const map = new Map<number, string>()
-    for (const u of resp.data) {
-      if (u.person_id != null) {
-        map.set(u.person_id, u.username)
-      }
-    }
-    userPersonMap.value = map
-  } catch {
-    // 无 user 管理权限时不展示账号状态
-  }
-}
-
 function resetFilters() {
   filters.name = ''
   filters.person_type = ''
@@ -312,7 +272,6 @@ function openCreateDialog() {
   formData.code = ''
   formData.name = ''
   formData.person_type = 'duty_operator'
-  formData.org_unit_id = null
   formData.phone = ''
   formData.participate_schedule = false
   formData.remark = ''
@@ -324,7 +283,6 @@ function openEditDialog(person: PersonItem) {
   formData.code = person.code
   formData.name = person.name
   formData.person_type = person.person_type
-  formData.org_unit_id = person.org_unit_id
   formData.phone = person.phone || ''
   formData.participate_schedule = person.participate_schedule
   formData.remark = person.remark || ''
@@ -336,7 +294,6 @@ function resetForm() {
   formData.code = ''
   formData.name = ''
   formData.person_type = 'duty_operator'
-  formData.org_unit_id = null
   formData.phone = ''
   formData.participate_schedule = false
   formData.remark = ''
@@ -351,7 +308,6 @@ async function save() {
     if (editingPerson.value) {
       await httpClient.put(`/persons/${editingPerson.value.id}`, {
         name: formData.name,
-        org_unit_id: formData.org_unit_id,
         phone: formData.phone || null,
         participate_schedule: formData.participate_schedule,
         remark: formData.remark || null,
@@ -362,7 +318,6 @@ async function save() {
         code: formData.code,
         name: formData.name,
         person_type: formData.person_type,
-        org_unit_id: formData.org_unit_id,
         phone: formData.phone || null,
         participate_schedule: formData.participate_schedule,
         remark: formData.remark || null,

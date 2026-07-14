@@ -39,6 +39,7 @@ export async function parseApiError(response: Response): Promise<ApiError> {
 
 interface HttpClientCallbacks {
   getToken?: () => string | null
+  getCurrentRoomId?: () => number | null
   onUnauthorized?: () => void
 }
 
@@ -98,6 +99,10 @@ export class HttpClient {
     const token = this.callbacks.getToken?.()
     if (token) {
       headers['Authorization'] = `Bearer ${token}`
+    }
+    const roomId = this.callbacks.getCurrentRoomId?.()
+    if (roomId) {
+      headers['X-Current-Room-Id'] = String(roomId)
     }
 
     const init: RequestInit = {

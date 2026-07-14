@@ -12,27 +12,26 @@ describe('menuItems', () => {
     expect(menuItems[0].path).toBe('/')
   })
 
-  it('contains all top-level menu groups', () => {
+  it('contains the revised flat menu entries', () => {
     const titles = menuItems.map((item) => item.title)
-    expect(titles).toContain('我的值班')
+    expect(titles).toContain('排班表')
+    expect(titles).toContain('换班申请')
+    expect(titles).toContain('请假申请')
+    expect(titles).toContain('我的顶班')
     expect(titles).toContain('审批中心')
-    expect(titles).toContain('排班管理')
-    expect(titles).toContain('请假顶班')
     expect(titles).toContain('退费管理')
-    expect(titles).toContain('考勤报表')
-    expect(titles).toContain('基础资料')
+    expect(titles).toContain('月度考勤')
+    expect(titles).toContain('导出历史')
+    expect(titles).toContain('人员管理')
+    expect(titles).toContain('班次规则')
     expect(titles).toContain('系统管理')
   })
 
-  it('has children for menu groups', () => {
-    const myDuty = menuItems.find((item) => item.name === 'my-duty')
-    expect(myDuty?.children).toHaveLength(4)
-    expect(myDuty?.children?.map((c) => c.title)).toEqual([
-      '我的排班',
-      '我的换班',
-      '我的请假',
-      '我的顶班',
-    ])
+  it('does not retain removed page entries', () => {
+    const titles = menuItems.map((item) => item.title)
+    expect(titles).not.toContain('我的排班')
+    expect(titles).not.toContain('排班明细')
+    expect(titles).not.toContain('顶班安排')
   })
 
   it('has unique paths for all items', () => {
@@ -86,21 +85,17 @@ describe('filterMenuByPermission', () => {
     expect(filtered[0].name).toBe('home')
   })
 
-  it('shows parent group only if it has visible children', () => {
-    const onlyDutySchedule = (code: PermissionCode) => code === PC.DUTY_SCHEDULE_VIEW_SELF
-    const filtered = filterMenuByPermission(menuItems, onlyDutySchedule)
+  it('shows a flat item when its permission is granted', () => {
+    const onlyScheduleTable = (code: PermissionCode) => code === PC.SCHEDULE_MONTHLY_VIEW
+    const filtered = filterMenuByPermission(menuItems, onlyScheduleTable)
 
-    const myDuty = filtered.find((item) => item.name === 'my-duty')
-    expect(myDuty).toBeDefined()
-    expect(myDuty?.children).toHaveLength(1)
-    expect(myDuty?.children?.[0].name).toBe('my-schedule')
+    expect(filtered.map((item) => item.name)).toEqual(['home', 'schedule-table'])
   })
 
-  it('hides entire group when no children are visible', () => {
+  it('hides all protected items when no permission is granted', () => {
     const hasNone = () => false
     const filtered = filterMenuByPermission(menuItems, hasNone)
 
-    const myDuty = filtered.find((item) => item.name === 'my-duty')
-    expect(myDuty).toBeUndefined()
+    expect(filtered).toHaveLength(1)
   })
 })

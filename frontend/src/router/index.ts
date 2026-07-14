@@ -17,9 +17,10 @@ const CUSTOM_VIEWS: Record<string, unknown> = {
   'account-role': () => import('@/views/system/AccountRoleView.vue'),
   'org-unit': () => import('@/views/base-data/OrgUnitView.vue'),
   person: () => import('@/views/base-data/PersonView.vue'),
-  'shift-rule': () => import('@/views/base-data/ShiftRuleView.vue'),
+  'schedule-rule': () => import('@/views/base-data/ShiftRuleView.vue'),
+  'shift-def': () => import('@/views/base-data/ShiftDefView.vue'),
   'holiday-standard': () => import('@/views/base-data/HolidayView.vue'),
-  'monthly-schedule': () => import('@/views/schedule/ScheduleCalendarView.vue'),
+  'schedule-table': () => import('@/views/schedule/ScheduleTableView.vue'),
 }
 
 function buildRoutes(items: MenuItem[]): RouteRecordRaw[] {

@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { router as appRouter } from '@/router'
 
 import HolidayView from '@/views/base-data/HolidayView.vue'
+import { usePermissionStore } from '@/stores/permission'
+import { PERMISSION_CODES } from '@/types/permission'
 
 vi.mock('@/services/http', () => ({
   httpClient: {
@@ -19,6 +21,10 @@ vi.mock('@/services/http', () => ({
 async function mountHolidayView() {
   const pinia = createPinia()
   setActivePinia(pinia)
+  usePermissionStore().setPermissions([
+    PERMISSION_CODES.HOLIDAY_GLOBAL_MANAGE,
+    PERMISSION_CODES.HOLIDAY_STANDARD_MANAGE,
+  ])
 
   const wrapper = mount(HolidayView, {
     global: {

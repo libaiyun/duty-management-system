@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import RequirePermission, get_db
 from app.schemas.response import ApiResponse, ok
+from app.core.role_matrix import CANONICAL_ROLE_CODES
 from app.schemas.role import (
     RoleCreateRequest,
     RoleDetailResponse,
@@ -10,12 +11,8 @@ from app.schemas.role import (
     RoleResponse,
     RoleUpdateRequest,
 )
-from app.services.auth import (
-    assign_role_permissions,
-    create_role,
-    list_roles,
-    update_role,
-)
+from app.core.exceptions import ForbiddenError
+from app.services.auth import list_roles
 
 router = APIRouter(prefix="/roles", tags=["roles"])
 
@@ -35,9 +32,7 @@ def create_role_endpoint(
     db: Session = Depends(get_db),
     _perm: None = Depends(RequirePermission("system:user:manage")),
 ) -> ApiResponse[RoleResponse]:
-    role = create_role(db, body.code, body.name, body.remark)
-    db.commit()
-    return ok(RoleResponse.model_validate(role))
+    raise ForbiddenError(message="角色矩阵为系统预置，不能创建")
 
 
 @router.get("/{role_id}", response_model=ApiResponse[RoleDetailResponse])
@@ -49,7 +44,7 @@ def get_role(
     from app.core.exceptions import NotFoundError
     from app.models.user import SysRole
     role = db.get(SysRole, role_id)
-    if role is None:
+    if role is None or role.code not in CANONICAL_ROLE_CODES:
         raise NotFoundError(message="角色不存在")
     return ok(RoleDetailResponse(
         id=role.id,
@@ -68,9 +63,7 @@ def update_role_endpoint(
     db: Session = Depends(get_db),
     _perm: None = Depends(RequirePermission("system:user:manage")),
 ) -> ApiResponse[RoleResponse]:
-    role = update_role(db, role_id, body.name, body.remark, body.status)
-    db.commit()
-    return ok(RoleResponse.model_validate(role))
+    raise ForbiddenError(message="角色矩阵为系统预置，不能修改")
 
 
 @router.put("/{role_id}/permissions", response_model=ApiResponse[None])
@@ -80,6 +73,4 @@ def update_role_permissions(
     db: Session = Depends(get_db),
     _perm: None = Depends(RequirePermission("system:user:manage")),
 ) -> ApiResponse[None]:
-    assign_role_permissions(db, role_id, body.permission_ids)
-    db.commit()
-    return ok(message="权限分配成功")
+    raise ForbiddenError(message="角色权限为系统预置，不能修改")

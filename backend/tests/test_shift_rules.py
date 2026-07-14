@@ -1,9 +1,13 @@
+from datetime import date
+
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from app.models.organization import OrgUnit
-from app.models.shift import ShiftRule, ShiftRuleItem, ShiftRuleVersion
-from app.models.user import SysPermission, SysRole
+from app.models.person import Person
+from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
+from app.models.user import SysDataScope, SysPermission, SysRole
 from app.services.auth import create_user
 
 pytestmark = pytest.mark.usefixtures("create_tables")
@@ -15,28 +19,47 @@ def _login(api_client: TestClient, db_session, username: str, password: str) -> 
     return resp.json()["data"]["access_token"]
 
 
-def _create_admin(api_client: TestClient, db_session) -> tuple[int, str]:
+def _create_admin(api_client: TestClient, db_session, select_room: bool = True, with_shift_def: bool = True) -> tuple[int, str]:
+    room = db_session.scalars(select(OrgUnit).where(OrgUnit.type == "room")).first()
+    if room is None:
+        room = OrgUnit(code="admin-current-room", name="管理员当前机房", type="room")
+        db_session.add(room)
+        db_session.flush()
     user = create_user(db_session, "admin", "password123", "管理员")
-    perm = SysPermission(code="shift:rule:view", name="View Shift Rule", type="api")
+    permissions = [
+        SysPermission(code="shift:rule:view", name="View Shift Rule", type="api"),
+        SysPermission(code="shift:rule:manage", name="Manage Shift Rule", type="api"),
+    ]
     role = SysRole(code="admin-role", name="Admin")
-    role.permissions.append(perm)
-    db_session.add_all([perm, role])
+    role.permissions.extend(permissions)
+    db_session.add_all([*permissions, role])
     user.roles.append(role)
+    db_session.flush()
+    db_session.add(SysDataScope(user_id=user.id, scope_type="all", org_unit_id=None))
+    if with_shift_def and not db_session.scalar(select(ShiftDef).where(ShiftDef.org_unit_id == room.id)):
+        db_session.add(ShiftDef(
+            org_unit_id=room.id, code="default_shift", name="默认班次",
+            start_time="08:00", end_time="16:00",
+        ))
+        db_session.add_all([
+            Person(code="default_operator_1", name="默认值班员1", org_unit_id=room.id,
+                   participate_schedule=True, person_type="duty_operator"),
+            Person(code="default_operator_2", name="默认值班员2", org_unit_id=room.id,
+                   participate_schedule=True, person_type="duty_operator"),
+        ])
     db_session.commit()
     token = _login(api_client, db_session, "admin", "password123")
+    if select_room:
+        api_client.headers["X-Current-Room-Id"] = str(room.id)
+    else:
+        api_client.headers.pop("X-Current-Room-Id", None)
     return user.id, token
 
 
 def _sample_days(cycle_days: int = 6) -> list[dict]:
     days = []
     for day_no in range(1, cycle_days + 1):
-        cells = []
-        for shift_id in range(1, 4):
-            cells.append({
-                "shift_def_id": shift_id,
-                "person_ids": list(range(100 + day_no * 10 + shift_id, 100 + day_no * 10 + shift_id + 2)),
-            })
-        days.append({"day_no": day_no, "cells": cells})
+        days.append({"day_no": day_no, "cells": [{"shift_def_id": 1, "person_ids": [1, 2]}]})
     return days
 
 
@@ -49,7 +72,7 @@ def _create_org(db_session) -> OrgUnit:
 
 class TestShiftRuleApi:
     def test_list_empty(self, api_client: TestClient, db_session) -> None:
-        _, token = _create_admin(api_client, db_session)
+        _, token = _create_admin(api_client, db_session, with_shift_def=False)
         resp = api_client.get("/api/v1/shift-rules", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
         assert resp.json()["data"] == []
@@ -97,7 +120,6 @@ class TestShiftRuleApi:
 
     def test_create_rule_with_org_unit(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
-        org = _create_org(db_session)
         resp = api_client.post(
             "/api/v1/shift-rules",
             json={
@@ -106,12 +128,12 @@ class TestShiftRuleApi:
                 "cycle_days": 5,
                 "start_date": "2026-09-01",
                 "persons_per_cell": 1,
-                "org_unit_id": org.id,
+                "org_unit_id": 99999,
             },
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
-        assert resp.json()["data"]["org_unit_id"] == org.id
+        assert resp.json()["data"]["org_unit_id"] is not None
 
     def test_create_rule_org_unit_not_found(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
@@ -127,7 +149,7 @@ class TestShiftRuleApi:
             },
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 404
+        assert resp.status_code == 200
 
     def test_get_rule_detail(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
@@ -320,6 +342,78 @@ class TestShiftRuleApi:
         assert resp.status_code == 401
 
 
+class TestShiftRuleCurrentRoom:
+    def test_admin_requires_current_room(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session, select_room=False)
+
+        resp = api_client.get("/api/v1/shift-rules", headers={"Authorization": f"Bearer {token}"})
+
+        assert resp.status_code == 422
+        assert resp.json()["code"] == "ADMIN_NO_ROOM_SELECTED"
+
+    def test_create_assigns_current_room_despite_client_org_unit(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room_a = OrgUnit(code="current-rule-a", name="机房A", type="room")
+        room_b = OrgUnit(code="current-rule-b", name="机房B", type="room")
+        db_session.add_all([room_a, room_b])
+        db_session.flush()
+        db_session.add(ShiftDef(org_unit_id=room_a.id, code="room_a_shift", name="机房A班次", start_time="08:00", end_time="16:00"))
+        db_session.commit()
+
+        resp = api_client.post(
+            "/api/v1/shift-rules",
+            json={"code": "current_rule", "name": "当前机房规则", "cycle_days": 1, "start_date": "2027-01-01", "persons_per_cell": 1, "org_unit_id": room_b.id},
+            headers={"Authorization": f"Bearer {token}", "X-Current-Room-Id": str(room_a.id)},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["data"]["org_unit_id"] == room_a.id
+
+    def test_detail_rejects_rule_outside_current_room(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room_a = OrgUnit(code="rule-detail-a", name="机房A", type="room")
+        room_b = OrgUnit(code="rule-detail-b", name="机房B", type="room")
+        db_session.add_all([room_a, room_b])
+        db_session.flush()
+        rule = ShiftRule(code="outside_rule", name="其他机房规则", cycle_days=1, start_date="2027-01-01", persons_per_cell=1, org_unit_id=room_b.id)
+        db_session.add(rule)
+        db_session.commit()
+
+        resp = api_client.get(
+            f"/api/v1/shift-rules/{rule.id}",
+            headers={"Authorization": f"Bearer {token}", "X-Current-Room-Id": str(room_a.id)},
+        )
+
+        assert resp.status_code == 404
+
+    @pytest.mark.parametrize("method,path_suffix", [
+        ("put", ""),
+        ("delete", ""),
+        ("post", "/publish"),
+        ("get", "/versions"),
+    ])
+    def test_mutation_and_version_routes_reject_rule_outside_current_room(
+        self, api_client: TestClient, db_session, method: str, path_suffix: str,
+    ) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room_a = OrgUnit(code=f"rule-route-a-{method}-{path_suffix}", name="机房A", type="room")
+        room_b = OrgUnit(code=f"rule-route-b-{method}-{path_suffix}", name="机房B", type="room")
+        db_session.add_all([room_a, room_b])
+        db_session.flush()
+        rule = ShiftRule(code=f"outside_{method}_{len(path_suffix)}", name="其他机房规则", cycle_days=1, start_date="2027-01-01", persons_per_cell=1, org_unit_id=room_b.id)
+        db_session.add(rule)
+        db_session.commit()
+
+        kwargs = {"headers": {"Authorization": f"Bearer {token}", "X-Current-Room-Id": str(room_a.id)}}
+        if method == "put":
+            kwargs["json"] = {}
+        response = getattr(api_client, method)(
+            f"/api/v1/shift-rules/{rule.id}{path_suffix}", **kwargs,
+        )
+
+        assert response.status_code == 404
+
+
 class TestShiftRuleModel:
     def test_default_values(self, db_session) -> None:
         rule = ShiftRule(
@@ -452,6 +546,105 @@ class TestShiftRuleValidation:
         assert r.status_code == 422
         assert "需要 3 人" in r.json()["message"]
 
+    def test_create_rejects_room_without_enabled_shift_defs(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session, with_shift_def=False)
+
+        response = api_client.post("/api/v1/shift-rules", json={
+            "code": "no_shifts", "name": "无班次规则", "cycle_days": 1,
+            "start_date": "2027-01-01", "persons_per_cell": 1,
+        }, headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 422
+        assert response.json()["message"] == "当前机房未配置班次定义，无法设置排班规则。"
+
+    def test_update_and_publish_reject_room_without_enabled_shift_defs(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        created = api_client.post("/api/v1/shift-rules", json={
+            "code": "disabled_shifts_rule", "name": "禁用班次规则", "cycle_days": 1,
+            "start_date": "2027-01-01", "persons_per_cell": 2,
+            "days": _sample_days(1),
+        }, headers={"Authorization": f"Bearer {token}"})
+        rule_id = created.json()["data"]["id"]
+        shift = db_session.scalar(select(ShiftDef).where(ShiftDef.code == "default_shift"))
+        assert shift is not None
+        shift.status = "disabled"
+        db_session.commit()
+
+        updated = api_client.put(f"/api/v1/shift-rules/{rule_id}", json={"name": "不能编辑"}, headers={"Authorization": f"Bearer {token}"})
+        published = api_client.post(f"/api/v1/shift-rules/{rule_id}/publish", headers={"Authorization": f"Bearer {token}"})
+
+        assert updated.status_code == 422
+        assert published.status_code == 422
+        assert updated.json()["message"] == "当前机房未配置班次定义，无法设置排班规则。"
+        assert published.json()["message"] == "当前机房未配置班次定义，无法设置排班规则。"
+
+    @pytest.mark.parametrize("status,participate_schedule,person_type", [
+        ("disabled", True, "duty_operator"),
+        ("enabled", False, "duty_operator"),
+        ("enabled", True, "maintenance"),
+    ])
+    def test_create_rejects_ineligible_cell_person(
+        self, api_client: TestClient, db_session, status: str, participate_schedule: bool, person_type: str,
+    ) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room = db_session.scalar(select(OrgUnit).where(OrgUnit.type == "room"))
+        assert room is not None
+        shift = ShiftDef(org_unit_id=room.id, code="validation_shift", name="验证班", start_time="08:00", end_time="16:00")
+        person = Person(code=f"validation_{status}_{str(participate_schedule).lower()}_{person_type}", name="验证人员", org_unit_id=room.id, status=status, participate_schedule=participate_schedule, person_type=person_type)
+        db_session.add_all([shift, person])
+        db_session.commit()
+
+        response = api_client.post("/api/v1/shift-rules", json={
+            "code": f"ineligible_{status}_{str(participate_schedule).lower()}_{person_type}", "name": "人员验证", "cycle_days": 1,
+            "start_date": "2027-01-01", "persons_per_cell": 1,
+            "days": [{"day_no": 1, "cells": [{"shift_def_id": shift.id, "person_ids": [person.id]}]}],
+        }, headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 422
+
+    def test_create_rejects_duplicate_cell_person(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room = db_session.scalar(select(OrgUnit).where(OrgUnit.type == "room"))
+        assert room is not None
+        shift = ShiftDef(org_unit_id=room.id, code="duplicate_shift", name="验证班", start_time="08:00", end_time="16:00")
+        person = Person(code="duplicate_person", name="验证人员", org_unit_id=room.id, participate_schedule=True, person_type="duty_operator")
+        db_session.add_all([shift, person])
+        db_session.commit()
+
+        response = api_client.post("/api/v1/shift-rules", json={
+            "code": "duplicate_person_rule", "name": "重复人员", "cycle_days": 1,
+            "start_date": "2027-01-01", "persons_per_cell": 2,
+            "days": [{"day_no": 1, "cells": [{"shift_def_id": shift.id, "person_ids": [person.id, person.id]}]}],
+        }, headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 422
+
+    def test_editing_published_rule_creates_draft_for_republishing(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room = db_session.scalar(select(OrgUnit).where(OrgUnit.type == "room"))
+        assert room is not None
+        shift = ShiftDef(org_unit_id=room.id, code="republish_shift", name="验证班", start_time="08:00", end_time="16:00")
+        person = Person(code="republish_person", name="验证人员", org_unit_id=room.id, participate_schedule=True, person_type="duty_operator")
+        db_session.add_all([shift, person])
+        db_session.commit()
+        payload = {
+            "code": "republish_rule", "name": "重新发布规则", "cycle_days": 1,
+            "start_date": "2027-01-01", "persons_per_cell": 1,
+            "days": [{"day_no": 1, "cells": [
+                {"shift_def_id": 1, "person_ids": [1]},
+                {"shift_def_id": shift.id, "person_ids": [person.id]},
+            ]}],
+        }
+        created = api_client.post("/api/v1/shift-rules", json=payload, headers={"Authorization": f"Bearer {token}"})
+        rule_id = created.json()["data"]["id"]
+        assert api_client.post(f"/api/v1/shift-rules/{rule_id}/publish", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+        edited = api_client.put(f"/api/v1/shift-rules/{rule_id}", json={"name": "已编辑", "days": payload["days"]}, headers={"Authorization": f"Bearer {token}"})
+
+        assert edited.status_code == 200
+        assert edited.json()["data"]["status"] == "draft"
+        assert api_client.post(f"/api/v1/shift-rules/{rule_id}/publish", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
 
 class TestScheduleGeneration:
     """M3-P1: 规则发布生成排班"""
@@ -469,11 +662,11 @@ class TestScheduleGeneration:
         db_session.commit()
         return org, [p1, p2]
 
-    def _create_shift_defs(self, db_session):
+    def _create_shift_defs(self, db_session, org):
         from app.models.shift import ShiftDef
-        early = ShiftDef(code="early", name="早班", start_time="00:00", end_time="08:00", display_order=1)
-        mid = ShiftDef(code="mid", name="中班", start_time="08:00", end_time="16:00", display_order=2)
-        late = ShiftDef(code="late", name="晚班", start_time="16:00", end_time="00:00", display_order=3)
+        early = ShiftDef(org_unit_id=org.id, code="early", name="早班", start_time="00:00", end_time="08:00", display_order=1)
+        mid = ShiftDef(org_unit_id=org.id, code="mid", name="中班", start_time="08:00", end_time="16:00", display_order=2)
+        late = ShiftDef(org_unit_id=org.id, code="late", name="晚班", start_time="16:00", end_time="00:00", display_order=3)
         db_session.add_all([early, mid, late])
         db_session.commit()
         return early, mid, late
@@ -513,20 +706,18 @@ class TestScheduleGeneration:
         ).order_by(ScheduleDay.duty_date).all()
         assert len(days) > 0
 
-    def test_publish_without_org_skips_generation(self, api_client: TestClient, db_session) -> None:
+    def test_publish_requires_rule_version(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
         resp = api_client.post("/api/v1/shift-rules", json={
-            "code": "rule_noorg", "name": "无机房",
+            "code": "rule_noorg", "name": "未保存版本",
             "cycle_days": 1, "start_date": "2027-07-01", "persons_per_cell": 1,
-            "days": [{"day_no": 1, "cells": [{"shift_def_id": 1, "person_ids": [1]}]}],
         }, headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
         rule_id = resp.json()["data"]["id"]
 
         resp = api_client.post(f"/api/v1/shift-rules/{rule_id}/publish",
                                headers={"Authorization": f"Bearer {token}"})
-        assert resp.status_code == 200
-        assert resp.json()["data"]["status"] == "published"
+        assert resp.status_code == 422
 
     # ── M3-P1-T3: 排班生成专项测试 ──
 
@@ -536,7 +727,7 @@ class TestScheduleGeneration:
         from app.services.schedule import generate_schedule_from_rule
 
         org, persons = self._setup_org_with_persons(db_session)
-        early, mid, late = self._create_shift_defs(db_session)
+        early, mid, late = self._create_shift_defs(db_session, org)
 
         rule = ShiftRule(
             code="r_cycle", name="循环测试",
@@ -598,13 +789,35 @@ class TestScheduleGeneration:
         d4_early = _first_person(days[3], early)  # Dec 4 = (Dec 4 - Dec 1) = 3 days, 3 % 3 = 0
         assert d1_early == d4_early
 
+    def test_cross_midnight_shift_ends_on_next_date(self, db_session) -> None:
+        from app.services.schedule import generate_schedule_from_rule
+
+        org, persons = self._setup_org_with_persons(db_session)
+        overnight = ShiftDef(org_unit_id=org.id, code="overnight", name="夜班", start_time="20:00", end_time="08:00")
+        rule = ShiftRule(code="overnight_rule", name="跨夜规则", cycle_days=1, start_date="2026-12-01", persons_per_cell=1, org_unit_id=org.id)
+        db_session.add_all([overnight, rule])
+        db_session.flush()
+        version = ShiftRuleVersion(rule_id=rule.id, version_no=1, cycle_days=1, start_date=rule.start_date, persons_per_cell=1, snapshot={"days": []}, status="published")
+        db_session.add(version)
+        db_session.flush()
+        db_session.add(ShiftRuleItem(version_id=version.id, day_no=1, cell_persons={str(overnight.id): [persons[0].id]}))
+        db_session.commit()
+
+        generate_schedule_from_rule(db_session, rule, version, total_days=0)
+
+        from app.models.schedule import ScheduleDay, ScheduleShift
+
+        shift = db_session.scalar(select(ScheduleShift).join(ScheduleDay).where(ScheduleDay.duty_date == date(2026, 12, 1)))
+        assert shift is not None
+        assert shift.end_at.date() == date(2026, 12, 2)
+
     def test_cross_month_continuity(self, db_session) -> None:
         """M3-P1-T3: 7 月 30 日起生成，8 月日期正确延续"""
         from datetime import date as _date
         from app.services.schedule import generate_schedule_from_rule
 
         org, persons = self._setup_org_with_persons(db_session)
-        early, _mid, _late = self._create_shift_defs(db_session)
+        early, _mid, _late = self._create_shift_defs(db_session, org)
 
         rule = ShiftRule(
             code="r_month", name="跨月测试",
@@ -656,7 +869,7 @@ class TestScheduleGeneration:
         from app.services.schedule import generate_schedule_from_rule
 
         org, persons = self._setup_org_with_persons(db_session)
-        early, _mid, _late = self._create_shift_defs(db_session)
+        early, _mid, _late = self._create_shift_defs(db_session, org)
 
         db_session.add(HolidayCalendar(
             holiday_date=_date(2026, 10, 1), holiday_name="国庆节",
@@ -717,7 +930,7 @@ class TestScheduleGeneration:
         from app.services.schedule import generate_schedule_from_rule
 
         org, persons = self._setup_org_with_persons(db_session)
-        early, _mid, _late = self._create_shift_defs(db_session)
+        early, _mid, _late = self._create_shift_defs(db_session, org)
 
         rule = ShiftRule(
             code="r_repub", name="重新发布测试",
@@ -801,7 +1014,11 @@ class TestPersonFilter:
         user.roles.append(role)
         db_session.add(SysDataScope(user_id=user.id, scope_type="all", org_unit_id=None))
         db_session.commit()
-        return _login(api_client, db_session, "padmin", "password123")
+        token = _login(api_client, db_session, "padmin", "password123")
+        room = db_session.scalars(select(OrgUnit).where(OrgUnit.type == "room")).first()
+        assert room is not None
+        api_client.headers["X-Current-Room-Id"] = str(room.id)
+        return token
 
     def test_filter_by_participate_schedule(self, api_client: TestClient, db_session) -> None:
         from app.models.organization import OrgUnit
