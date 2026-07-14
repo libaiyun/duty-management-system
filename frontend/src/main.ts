@@ -27,6 +27,11 @@ httpClient.configureCallbacks({
   },
 })
 
-authStore.restoreSession()
-
-app.mount('#app')
+;(async () => {
+  try {
+    await authStore.restoreSession()
+  } catch {
+    // session restore failure already handled internally
+  }
+  app.mount('#app')
+})()

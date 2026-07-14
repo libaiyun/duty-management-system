@@ -86,9 +86,16 @@ router.beforeEach((to, _from, next) => {
   }
 
   const permission = to.meta.permission as PermissionCode | undefined
-  if (permission && !usePermissionStore().hasPermission(permission)) {
-    next({ name: 'forbidden' })
-    return
+  if (permission) {
+    const permStore = usePermissionStore()
+    if (!permStore.loaded) {
+      next()
+      return
+    }
+    if (!permStore.hasPermission(permission)) {
+      next({ name: 'forbidden' })
+      return
+    }
   }
 
   next()

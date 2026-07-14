@@ -4,6 +4,7 @@ import type { PermissionCode } from '@/types/permission'
 
 export const usePermissionStore = defineStore('permission', {
   state: () => ({
+    loaded: false,
     permissions: new Set<PermissionCode>(),
   }),
 
@@ -16,10 +17,12 @@ export const usePermissionStore = defineStore('permission', {
   actions: {
     setPermissions(codes: PermissionCode[]): void {
       this.permissions = new Set(codes)
+      this.loaded = true
     },
 
     clearPermissions(): void {
       this.permissions = new Set()
+      this.loaded = false
     },
   },
 })

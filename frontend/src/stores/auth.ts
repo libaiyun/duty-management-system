@@ -57,10 +57,25 @@ export const useAuthStore = defineStore('auth', {
       this._clearAuthState()
     },
 
-    restoreSession(): void {
+    async restoreSession(): Promise<void> {
       if (!this.accessToken) return
       const appStore = useAppStore()
       appStore.userName = this.displayName
+
+      try {
+        const meResp = await httpClient.get<UserMeResponse>('/auth/me')
+        const user = meResp.data
+        this.username = user.username
+        this.displayName = user.display_name
+        localStorage.setItem(USER_KEY, user.display_name)
+        appStore.userName = user.display_name
+
+        const permStore = usePermissionStore()
+        permStore.setPermissions(user.permissions as PermissionCode[])
+      } catch {
+        // on 401, onUnauthorized callback in main.ts handles forceLogout + redirect
+        // on other errors, permissions remain empty → 403/limited menu (visible feedback)
+      }
     },
 
     forceLogout(): void {
