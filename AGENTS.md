@@ -23,3 +23,22 @@ Docker Compose 部署。
 4. 开发实施计划
 
 如果仍然无法判断，不要自行扩大需求，停下来然后提问。
+
+## 开发流程（TDD）
+
+1. 先写测试，验证测试失败（Red）
+2. 编写最小实现，让测试通过（Green）
+
+### 测试命令
+
+| 端     | 命令                                      |
+| ------ | ----------------------------------------- |
+| 后端   | `docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm --no-deps backend pytest`（依赖 pyproject.toml 配置）       |
+| 前端   | `npm --prefix frontend run test`          |
+
+### 约定
+
+- 后端测试文件命名 `test_<module>.py`，放在 `backend/tests/`
+- 前端测试文件命名 `<module>.test.ts`，放在 `frontend/tests/`
+- 每个测试函数/用例只测一个行为，保持隔离
+- 测试不应依赖真实网络或外部服务
