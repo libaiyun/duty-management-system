@@ -35,7 +35,7 @@ Docker Compose 部署。
 
 | 端     | 命令                                      |
 | ------ | ----------------------------------------- |
-| 后端   | `docker compose -f docker-compose.yml -f docker-compose.dev.yml run --rm --no-deps backend pytest backend/tests/`（依赖 pyproject.toml 配置）       |
+| 后端   | `docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --wait db-test && docker compose -f docker-compose.yml -f docker-compose.test.yml run --rm --no-deps backend pytest backend/tests/`（依赖 pyproject.toml 配置）       |
 | 前端   | `npm --prefix frontend run test`          |
 
 ### 约定

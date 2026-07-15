@@ -1,10 +1,6 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine, event, select
-from sqlalchemy.orm import Session, sessionmaker
-
-from app.db.base import Base
 from app.models.user import (
     SysDataScope,
     SysPermission,
@@ -13,20 +9,13 @@ from app.models.user import (
     sys_role_permission,
     sys_user_role,
 )
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 
 @pytest.fixture
-def session() -> Session:
-    engine = create_engine("sqlite:///:memory:")
-    event.listen(engine, "connect", lambda conn, _: conn.execute("PRAGMA foreign_keys=ON"))
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(bind=engine, expire_on_commit=False)
-    s = session_factory()
-    try:
-        yield s
-    finally:
-        s.close()
-        engine.dispose()
+def session(db_session: Session) -> Session:
+    return db_session
 
 
 def test_create_user(session: Session) -> None:
@@ -170,7 +159,7 @@ def test_soft_delete_user(session: Session) -> None:
     session.flush()
 
     assert user.deleted_at is None
-    user.deleted_at = datetime.now(timezone.utc)
+    user.deleted_at = datetime.now(UTC)
     session.flush()
     assert user.deleted_at is not None
 

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from alembic import command
 from alembic.config import Config
 from app.core.config import AppEnvironment, Settings
@@ -24,20 +22,20 @@ class SampleRecord(LocalBase):
 def test_create_db_engine_uses_settings_database_url() -> None:
     settings = Settings(
         app_env=AppEnvironment.TEST,
-        database_url="sqlite:///:memory:",
+        database_url="postgresql+psycopg://test:test@db:5432/test_db",
         redis_url="redis://localhost:6379/1",
         jwt_secret_key="test-secret",
         jwt_algorithm="HS256",
         jwt_access_token_expire_minutes=30,
         jwt_refresh_token_expire_minutes=10080,
-        file_storage_dir=Path("tmp/files"),
-        export_dir=Path("tmp/files/export"),
-        backup_dir=Path("tmp/files/backup"),
+        file_storage_dir="tmp/files",
+        export_dir="tmp/files/export",
+        backup_dir="tmp/files/backup",
     )
 
     engine = create_db_engine(settings)
     try:
-        assert str(engine.url) == "sqlite:///:memory:"
+        assert str(engine.url) == "postgresql+psycopg://test:***@db:5432/test_db"
     finally:
         engine.dispose()
 
@@ -51,9 +49,9 @@ def test_create_db_engine_supports_postgresql_dialect() -> None:
         jwt_algorithm="HS256",
         jwt_access_token_expire_minutes=30,
         jwt_refresh_token_expire_minutes=10080,
-        file_storage_dir=Path("tmp/files"),
-        export_dir=Path("tmp/files/export"),
-        backup_dir=Path("tmp/files/backup"),
+        file_storage_dir="tmp/files",
+        export_dir="tmp/files/export",
+        backup_dir="tmp/files/backup",
     )
 
     engine = create_db_engine(settings)
@@ -69,9 +67,9 @@ def test_test_models_do_not_pollute_application_metadata() -> None:
     assert "sample_record" in LocalBase.metadata.tables
 
 
-def test_test_transaction_rolls_back_data(sqlite_engine) -> None:
-    LocalBase.metadata.create_all(bind=sqlite_engine)
-    connection = sqlite_engine.connect()
+def test_test_transaction_rolls_back_data(postgres_engine) -> None:
+    LocalBase.metadata.create_all(bind=postgres_engine)
+    connection = postgres_engine.connect()
     transaction = connection.begin()
     session_factory = sessionmaker(bind=connection, expire_on_commit=False)
     session = session_factory()
@@ -87,7 +85,7 @@ def test_test_transaction_rolls_back_data(sqlite_engine) -> None:
         transaction.rollback()
         connection.close()
 
-    verification_session_factory = sessionmaker(bind=sqlite_engine, expire_on_commit=False)
+    verification_session_factory = sessionmaker(bind=postgres_engine, expire_on_commit=False)
     with verification_session_factory() as verification_session:
         rows = verification_session.scalars(select(SampleRecord)).all()
 
@@ -95,15 +93,14 @@ def test_test_transaction_rolls_back_data(sqlite_engine) -> None:
 
 
 def test_alembic_upgrade_head_creates_current_schema_and_role_matrix(
-    monkeypatch,
-    sqlite_database_url: str,
+    empty_postgres_database_url: str,
 ) -> None:
-    monkeypatch.setenv("DUTY_DATABASE_URL", sqlite_database_url)
     alembic_config = Config("alembic.ini")
+    alembic_config.attributes["database_url"] = empty_postgres_database_url
 
     command.upgrade(alembic_config, "head")
 
-    engine = create_engine(sqlite_database_url)
+    engine = create_engine(empty_postgres_database_url)
     try:
         inspector = inspect(engine)
         assert set(inspector.get_table_names()) == {
@@ -131,9 +128,9 @@ def test_alembic_upgrade_head_creates_current_schema_and_role_matrix(
                 role_code: {permission_code for permission_code, in connection.execute(
                     text("""
                         SELECT permission.code
-                        FROM sys_role_permission AS grant
-                        JOIN sys_permission AS permission ON permission.id = grant.permission_id
-                        WHERE grant.role_id = :role_id
+                        FROM sys_role_permission AS role_permission
+                        JOIN sys_permission AS permission ON permission.id = role_permission.permission_id
+                        WHERE role_permission.role_id = :role_id
                     """),
                     {"role_id": role_id},
                 ).all()}
@@ -147,16 +144,15 @@ def test_alembic_upgrade_head_creates_current_schema_and_role_matrix(
 
 
 def test_alembic_downgrade_base_drops_application_tables(
-    monkeypatch,
-    sqlite_database_url: str,
+    empty_postgres_database_url: str,
 ) -> None:
-    monkeypatch.setenv("DUTY_DATABASE_URL", sqlite_database_url)
     alembic_config = Config("alembic.ini")
+    alembic_config.attributes["database_url"] = empty_postgres_database_url
 
     command.upgrade(alembic_config, "head")
     command.downgrade(alembic_config, "base")
 
-    engine = create_engine(sqlite_database_url)
+    engine = create_engine(empty_postgres_database_url)
     try:
         assert set(inspect(engine).get_table_names()) <= {"alembic_version"}
     finally:

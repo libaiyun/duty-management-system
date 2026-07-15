@@ -1,0 +1,21 @@
+services:
+  backend:
+    environment:
+      DUTY_DATABASE_URL: postgresql+psycopg://duty_test:duty_test@db-test:5432/duty_system_test
+      DUTY_TEST_ADMIN_DATABASE_URL: postgresql+psycopg://duty_test:duty_test@db-test:5432/postgres
+
+  db-test:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: duty_system_test
+      POSTGRES_USER: duty_test
+      POSTGRES_PASSWORD: duty_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U duty_test -d duty_system_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - duty_net

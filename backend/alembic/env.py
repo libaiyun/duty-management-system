@@ -1,11 +1,10 @@
 from logging.config import fileConfig
 from os import environ
 
-from alembic import context
-from sqlalchemy import engine_from_config, pool
-
-from app.db.base import Base
 import app.models  # noqa: F401 — ensure all models are imported for autogenerate
+from alembic import context
+from app.db.base import Base
+from sqlalchemy import engine_from_config, pool
 
 config = context.config
 
@@ -16,7 +15,11 @@ target_metadata = Base.metadata
 
 
 def get_database_url() -> str:
-    return environ.get("DUTY_DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+    return (
+        config.attributes.get("database_url")
+        or environ.get("DUTY_DATABASE_URL")
+        or config.get_main_option("sqlalchemy.url")
+    )
 
 
 def run_migrations_offline() -> None:

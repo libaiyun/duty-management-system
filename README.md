@@ -10,6 +10,12 @@
 COMPOSE='docker compose -f docker-compose.yml -f docker-compose.dev.yml'
 ```
 
+测试环境使用独立、无持久化的 PostgreSQL 服务，不复用开发数据库：
+
+```bash
+TEST_COMPOSE='docker compose -f docker-compose.yml -f docker-compose.test.yml'
+```
+
 启动开发环境：
 
 ```bash
@@ -98,8 +104,33 @@ npm --prefix frontend run test
 npm --prefix frontend run build
 ```
 
-后端：
+后端测试会为每个并行 worker 创建独立 PostgreSQL 临时数据库，执行 Alembic migration，并在测试结束后删除。先启动测试数据库：
 
 ```bash
-$COMPOSE run --rm --no-deps backend pytest backend/tests/
+$TEST_COMPOSE up -d --wait db-test
+```
+
+运行完整后端测试。pytest 配置会自动启用并行执行：
+
+```bash
+$TEST_COMPOSE run --rm --no-deps backend pytest backend/tests/
+```
+
+运行单个测试文件：
+
+```bash
+$TEST_COMPOSE run --rm --no-deps backend pytest backend/tests/test_database.py
+```
+
+仅在首次运行，或修改 `Dockerfile`、`pyproject.toml` 等镜像构建输入后重建后端镜像：
+
+```bash
+$TEST_COMPOSE build backend
+```
+
+测试结束后清理临时 PostgreSQL 容器：
+
+```bash
+$TEST_COMPOSE stop db-test
+$TEST_COMPOSE rm -f db-test
 ```

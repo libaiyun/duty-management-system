@@ -1,10 +1,9 @@
+from app.db.session import get_db
+from app.schemas.response import ApiResponse, ok
 from fastapi import Depends
 from fastapi.testclient import TestClient
 from sqlalchemy import Integer, String, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
-
-from app.db.session import get_db
-from app.schemas.response import ApiResponse, ok
 
 
 class FixtureBase(DeclarativeBase):
@@ -20,7 +19,7 @@ class FixtureRecord(FixtureBase):
 
 def test_api_client_uses_test_settings(api_client) -> None:
     assert api_client.app.state.settings.app_env == "test"
-    assert api_client.app.state.settings.database_url.startswith("sqlite:///")
+    assert api_client.app.state.settings.database_url.startswith("postgresql+psycopg://")
 
 
 def test_app_fixture_overrides_get_db(app, db_session: Session) -> None:
@@ -65,3 +64,21 @@ def test_db_session_fixture_supports_commit_inside_test(db_session: Session) -> 
     names = db_session.scalars(select(FixtureRecord.name)).all()
 
     assert names == ["committed-in-test"]
+
+
+def test_db_session_fixture_rolls_back_committed_data(postgres_engine) -> None:
+    FixtureBase.metadata.create_all(bind=postgres_engine)
+
+    connection = postgres_engine.connect()
+    transaction = connection.begin()
+    session = Session(bind=connection, join_transaction_mode="create_savepoint")
+    session.add(FixtureRecord(name="rolled-back-after-test"))
+    session.commit()
+    session.close()
+    transaction.rollback()
+    connection.close()
+
+    with Session(postgres_engine) as verification_session:
+        names = verification_session.scalars(select(FixtureRecord.name)).all()
+
+    assert names == []
