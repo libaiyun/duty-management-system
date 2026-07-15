@@ -55,6 +55,10 @@ export const useAuthStore = defineStore('auth', {
 
       const permStore = usePermissionStore()
       permStore.setPermissions(user.permissions as PermissionCode[])
+
+      if (this.canSwitchRoom) {
+        await useRoomContextStore().loadRooms()
+      }
     },
 
     async logout(): Promise<void> {
@@ -85,9 +89,31 @@ export const useAuthStore = defineStore('auth', {
 
         const permStore = usePermissionStore()
         permStore.setPermissions(user.permissions as PermissionCode[])
+
+        if (this.canSwitchRoom) {
+          await useRoomContextStore().loadRooms()
+        }
       } catch {
-        // on 401, onUnauthorized callback in main.ts handles forceLogout + redirect
+        // The HTTP client handles failed token refreshes by forcing logout and redirecting.
         // on other errors, permissions remain empty → 403/limited menu (visible feedback)
+      }
+    },
+
+    async refreshAccessToken(): Promise<boolean> {
+      if (!this.refreshToken) return false
+
+      try {
+        const response = await httpClient.post<TokenResponse>('/auth/refresh', {
+          refresh_token: this.refreshToken,
+        })
+        const tokens = response.data
+        this.accessToken = tokens.access_token
+        this.refreshToken = tokens.refresh_token
+        localStorage.setItem(TOKEN_KEY, tokens.access_token)
+        localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refresh_token)
+        return true
+      } catch {
+        return false
       }
     },
 

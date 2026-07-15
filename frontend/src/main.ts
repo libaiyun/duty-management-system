@@ -24,6 +24,7 @@ const roomContextStore = useRoomContextStore()
 httpClient.configureCallbacks({
   getToken: () => authStore.accessToken || null,
   getCurrentRoomId: () => roomContextStore.currentRoomId,
+  refreshToken: () => authStore.refreshAccessToken(),
   onUnauthorized: () => {
     authStore.forceLogout()
     router.push({ name: 'login' })

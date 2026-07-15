@@ -102,7 +102,7 @@
     >
       <el-form ref="formRef" :model="formData" :rules="formRules" label-position="top">
         <el-form-item label="人员编号" prop="code">
-          <el-input v-model="formData.code" :disabled="!!editingPerson" />
+          <el-input v-model="formData.code" :disabled="!!editingPerson" placeholder="留空自动生成" />
         </el-form-item>
         <el-form-item label="姓名" prop="name">
           <el-input v-model="formData.name" />
@@ -140,7 +140,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
-import { httpClient } from '@/services/http'
+import { httpClient, resolveErrorMessage } from '@/services/http'
 
 interface OrgUnitItem {
   id: number
@@ -227,11 +227,10 @@ const formData = reactive({
   name: '',
   person_type: 'duty_operator',
   phone: '',
-  participate_schedule: false,
+  participate_schedule: true,
   remark: '',
 })
 const formRules: FormRules = {
-  code: [{ required: true, message: '请输入人员编号' }],
   name: [{ required: true, message: '请输入姓名' }],
   person_type: [{ required: true, message: '请选择人员类型' }],
 }
@@ -254,8 +253,8 @@ async function loadPersons() {
   try {
     const resp = await httpClient.get<PersonItem[]>('/persons')
     persons.value = resp.data
-  } catch {
-    ElMessage.error('加载人员列表失败')
+  } catch (err) {
+    ElMessage.error(resolveErrorMessage(err, '加载人员列表失败'))
   } finally {
     loading.value = false
   }
@@ -273,7 +272,7 @@ function openCreateDialog() {
   formData.name = ''
   formData.person_type = 'duty_operator'
   formData.phone = ''
-  formData.participate_schedule = false
+  formData.participate_schedule = true
   formData.remark = ''
   formVisible.value = true
 }
@@ -295,7 +294,7 @@ function resetForm() {
   formData.name = ''
   formData.person_type = 'duty_operator'
   formData.phone = ''
-  formData.participate_schedule = false
+  formData.participate_schedule = true
   formData.remark = ''
   formRef.value?.resetFields()
 }
@@ -315,7 +314,7 @@ async function save() {
       ElMessage.success('编辑成功')
     } else {
       await httpClient.post('/persons', {
-        code: formData.code,
+        ...(formData.code ? { code: formData.code } : {}),
         name: formData.name,
         person_type: formData.person_type,
         phone: formData.phone || null,

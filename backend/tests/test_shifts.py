@@ -114,6 +114,18 @@ class TestShiftDefApi:
         assert data["display_order"] == 1
         assert data["status"] == "enabled"
 
+    def test_create_shift_without_code_generates_valid_unique_code(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        first = api_client.post("/api/v1/shifts", json={"name": "甲班", "start_time": "00:00", "end_time": "08:00"}, headers=headers)
+        second = api_client.post("/api/v1/shifts", json={"name": "乙班", "start_time": "08:00", "end_time": "16:00"}, headers=headers)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["data"]["code"].replace("_", "").isalpha()
+        assert first.json()["data"]["code"] != second.json()["data"]["code"]
+
     def test_create_multiple_shifts(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
         shifts = [

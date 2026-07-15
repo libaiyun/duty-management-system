@@ -118,6 +118,19 @@ class TestShiftRuleApi:
         assert data["code"] == "rule_02"
         assert len(data["items"]) == 0
 
+    def test_create_rule_without_code_generates_unique_code(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        headers = {"Authorization": f"Bearer {token}"}
+        payload = {"name": "空规则", "cycle_days": 3, "start_date": "2027-08-01", "persons_per_cell": 1}
+
+        first = api_client.post("/api/v1/shift-rules", json=payload, headers=headers)
+        second = api_client.post("/api/v1/shift-rules", json={**payload, "name": "空规则2"}, headers=headers)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["data"]["code"]
+        assert first.json()["data"]["code"] != second.json()["data"]["code"]
+
     def test_create_rule_with_org_unit(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
         resp = api_client.post(

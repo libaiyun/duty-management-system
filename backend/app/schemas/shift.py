@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 
 
 class ShiftDefCreateRequest(BaseModel):
-    code: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z_]+$")
+    code: str | None = Field(None, min_length=1, max_length=64, pattern=r"^[a-z_]+$")
     name: str = Field(..., min_length=1, max_length=64)
     start_time: str = Field(..., pattern=r"^\d{2}:\d{2}$")
     end_time: str = Field(..., pattern=r"^\d{2}:\d{2}$")
@@ -44,7 +44,7 @@ class ShiftRuleDayRequest(BaseModel):
 
 class ShiftRuleCreateRequest(BaseModel):
     org_unit_id: int | None = None
-    code: str = Field(..., min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
+    code: str | None = Field(None, min_length=1, max_length=64, pattern=r"^[a-z0-9_]+$")
     name: str = Field(..., min_length=1, max_length=128)
     cycle_days: int = Field(6, ge=1)
     start_date: date_type

@@ -23,7 +23,7 @@
     <el-dialog v-model="dialogVisible" :title="editing ? '编辑规则' : '新增规则'" width="900px" @closed="resetForm">
       <el-form ref="formRef" :model="form" :rules="formRules" label-position="top">
         <el-row :gutter="16">
-          <el-col :span="12"><el-form-item label="规则编码" prop="code"><el-input v-model="form.code" :disabled="!!editing" placeholder="小写字母/数字/下划线" /></el-form-item></el-col>
+          <el-col :span="12"><el-form-item label="规则编码" prop="code"><el-input v-model="form.code" :disabled="!!editing" placeholder="留空自动生成" /></el-form-item></el-col>
           <el-col :span="12"><el-form-item label="规则名称" prop="name"><el-input v-model="form.name" /></el-form-item></el-col>
         </el-row>
         <el-row :gutter="16">
@@ -72,7 +72,6 @@ const form = reactive({ code: '', name: '', cycle_days: 6, start_date: null as D
 const enabledShiftDefs = computed(() => shiftDefs.value.filter((shift) => shift.status === 'enabled').sort((a, b) => a.display_order - b.display_order))
 const availablePersons = computed(() => persons.value.filter((person) => person.participate_schedule && person.status === 'enabled'))
 const formRules: FormRules = {
-  code: [{ required: true, message: '请输入规则编码' }, { pattern: /^[a-z0-9_]+$/, message: '只能包含小写字母、数字、下划线' }],
   name: [{ required: true, message: '请输入规则名称' }],
   cycle_days: [{ required: true, message: '请设置循环天数' }],
   start_date: [{ required: true, message: '请选择起始日期' }],
@@ -83,10 +82,10 @@ onMounted(async () => { await Promise.all([loadRules(), loadShiftDefs(), loadPer
 
 async function loadRules() {
   loading.value = true
-  try { shiftRules.value = (await httpClient.get<ShiftRuleData[]>('/shift-rules')).data } catch { ElMessage.error('加载排班规则失败') } finally { loading.value = false }
+  try { shiftRules.value = (await httpClient.get<ShiftRuleData[]>('/shift-rules')).data } catch (err) { ElMessage.error(resolveErrorMessage(err, '加载排班规则失败')) } finally { loading.value = false }
 }
 async function loadShiftDefs() {
-  try { shiftDefs.value = (await httpClient.get<ShiftDefItem[]>('/shifts')).data } catch { ElMessage.error('加载班次列表失败') }
+  try { shiftDefs.value = (await httpClient.get<ShiftDefItem[]>('/shifts')).data } catch (err) { ElMessage.error(resolveErrorMessage(err, '加载班次列表失败')) }
 }
 async function loadPersons() {
   try { persons.value = (await httpClient.get<PersonItem[]>('/persons')).data } catch { /* optional list */ }
@@ -111,7 +110,7 @@ async function save() {
   const payload = { name: form.name, cycle_days: form.cycle_days, start_date: form.start_date ? formatDate(form.start_date) : '', persons_per_cell: form.persons_per_cell, remark: form.remark || null, days: buildDaysPayload() }
   try {
     if (editing.value) { await httpClient.put(`/shift-rules/${editing.value.id}`, payload); ElMessage.success('编辑成功') }
-    else { await httpClient.post('/shift-rules', { code: form.code, ...payload }); ElMessage.success('创建成功') }
+    else { await httpClient.post('/shift-rules', { ...(form.code ? { code: form.code } : {}), ...payload }); ElMessage.success('创建成功') }
     dialogVisible.value = false; await loadRules()
   } catch (err) { ElMessage.error(resolveErrorMessage(err, '操作失败')) } finally { saving.value = false }
 }

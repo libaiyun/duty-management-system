@@ -31,7 +31,7 @@
     <el-dialog v-model="dialogVisible" :title="editing ? '编辑班次' : '新增班次'" width="480px" @closed="resetForm">
       <el-form ref="formRef" :model="form" :rules="formRules" label-position="top">
         <el-form-item label="班次编码" prop="code">
-          <el-input v-model="form.code" :disabled="!!editing" placeholder="如 early/middle/night" />
+          <el-input v-model="form.code" :disabled="!!editing" placeholder="留空自动生成" />
         </el-form-item>
         <el-form-item label="班次名称" prop="name"><el-input v-model="form.name" placeholder="如 早班/中班/晚班" /></el-form-item>
         <el-form-item label="开始时间" prop="start_time"><el-input v-model="form.start_time" placeholder="HH:MM，如 00:00" /></el-form-item>
@@ -70,7 +70,6 @@ const editing = ref<ShiftDefItem | null>(null)
 const formRef = ref<FormInstance>()
 const form = reactive({ code: '', name: '', start_time: '', end_time: '', display_order: 0 })
 const formRules: FormRules = {
-  code: [{ required: true, message: '请输入班次编码' }],
   name: [{ required: true, message: '请输入班次名称' }],
   start_time: [{ required: true, message: '请输入开始时间' }, { pattern: /^\d{2}:\d{2}$/, message: '格式应为 HH:MM' }],
   end_time: [{ required: true, message: '请输入结束时间' }, { pattern: /^\d{2}:\d{2}$/, message: '格式应为 HH:MM' }],
@@ -119,7 +118,13 @@ async function save() {
       await httpClient.put(`/shifts/${editing.value.id}`, { name: form.name, start_time: form.start_time, end_time: form.end_time, display_order: form.display_order })
       ElMessage.success('编辑成功')
     } else {
-      await httpClient.post('/shifts', { ...form })
+      await httpClient.post('/shifts', {
+        ...(form.code ? { code: form.code } : {}),
+        name: form.name,
+        start_time: form.start_time,
+        end_time: form.end_time,
+        display_order: form.display_order,
+      })
       ElMessage.success('创建成功')
     }
     dialogVisible.value = false

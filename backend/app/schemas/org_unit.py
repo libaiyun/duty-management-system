@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 
 class OrgUnitCreateRequest(BaseModel):
     parent_id: int | None = None
-    code: str = Field(..., min_length=1, max_length=64)
+    code: str | None = Field(None, min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=128)
     type: str = Field(..., min_length=1, max_length=32)
     manager_person_id: int | None = None

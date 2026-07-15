@@ -79,20 +79,18 @@ describe('PersonView', () => {
     expect(wrapper.text()).not.toContain('所属机房')
   })
 
-  it('does not send org_unit_id when creating a person', async () => {
+  it('does not send an empty code or org_unit_id when creating a person', async () => {
     await wrapper.get('.person-view__toolbar .el-button').trigger('click')
     const form = (wrapper.vm as unknown as { formData: Record<string, unknown> }).formData
-    form.code = 'P001'
     form.name = '张三'
 
     await (wrapper.vm as unknown as { save: () => Promise<void> }).save()
 
     expect(httpClient.post).toHaveBeenCalledWith('/persons', {
-      code: 'P001',
       name: '张三',
       person_type: 'duty_operator',
       phone: null,
-      participate_schedule: false,
+      participate_schedule: true,
       remark: null,
     })
   })

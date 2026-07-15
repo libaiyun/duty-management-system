@@ -36,6 +36,9 @@ export const useRoomContextStore = defineStore('room-context', {
 
       const response = await httpClient.get<OrgUnitItem[]>('/org-units')
       this.rooms = response.data.filter((unit) => unit.type === 'room')
+      if (!this.rooms.some((room) => room.id === this.selectedRoomId)) {
+        this.selectRoom(this.rooms[0]?.id ?? null)
+      }
     },
     selectRoom(roomId: number | null): void {
       this.selectedRoomId = roomId

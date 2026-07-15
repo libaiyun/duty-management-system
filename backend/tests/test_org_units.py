@@ -49,6 +49,18 @@ class TestOrgUnitApi:
         assert data["type"] == "station"
         assert data["status"] == "enabled"
 
+    def test_create_org_unit_without_code_generates_unique_code(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        first = api_client.post("/api/v1/org-units", json={"name": "台站A", "type": "station"}, headers=headers)
+        second = api_client.post("/api/v1/org-units", json={"name": "台站B", "type": "station"}, headers=headers)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["data"]["code"]
+        assert first.json()["data"]["code"] != second.json()["data"]["code"]
+
     def test_create_child_org_unit(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
         parent_resp = api_client.post(

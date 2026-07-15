@@ -1,12 +1,12 @@
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 from sqlalchemy import exists, inspect, select, text
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import Settings
-from app.core.role_matrix import CANONICAL_ROLE_CODES, ROLE_MATRIX, canonical_permissions
 from app.core.exceptions import BusinessRuleError, NotFoundError, StateConflictError, UnauthorizedError
+from app.core.role_matrix import CANONICAL_ROLE_CODES, ROLE_MATRIX, canonical_permissions
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -19,6 +19,27 @@ from app.models.person import Person
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
 from app.models.user import SysDataScope, SysPermission, SysRole, SysUser, sys_role_permission, sys_user_role
 from app.services.schedule import generate_schedule_from_rule
+
+
+def _generated_code_suffix(number: int) -> str:
+    """Produce an alphabetic suffix so generated shift codes match their stricter pattern."""
+    result = ""
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        result = chr(ord("a") + remainder) + result
+    return result
+
+
+def _generate_unique_code(db: Session, model, prefix: str, *scope) -> str:
+    number = 0
+    while True:
+        code = prefix if number == 0 else f"{prefix}_{_generated_code_suffix(number)}"
+        if len(code) > 64:
+            raise StateConflictError(message="无法生成可用编码")
+        if db.scalar(select(model.id).where(model.code == code, *scope).limit(1)) is None:
+            return code
+        number += 1
+
 
 def authenticate_user(db: Session, username: str, password: str) -> SysUser:
     user = db.scalar(select(SysUser).where(SysUser.username == username))
@@ -258,10 +279,11 @@ def list_org_units(db: Session, org_unit_ids: set[int] | None = None) -> list[Or
 
 
 def create_org_unit(
-    db: Session, code: str, name: str, type_: str,
+    db: Session, code: str | None, name: str, type_: str,
     parent_id: int | None = None, sort_order: int = 0,
     manager_person_id: int | None = None,
 ) -> OrgUnit:
+    code = code or _generate_unique_code(db, OrgUnit, "org_unit")
     existing = db.scalars(select(OrgUnit).where(OrgUnit.code == code)).first()
     if existing:
         raise StateConflictError(message=f"组织编码 '{code}' 已存在")
@@ -359,11 +381,12 @@ def list_persons(
 
 
 def create_person(
-    db: Session, code: str, name: str, person_type: str,
+    db: Session, code: str | None, name: str, person_type: str,
     org_unit_id: int | None = None, phone: str | None = None,
     participate_schedule: bool = False,
     remark: str | None = None,
 ) -> Person:
+    code = code or _generate_unique_code(db, Person, "person")
     existing = db.scalars(select(Person).where(Person.code == code)).first()
     if existing:
         raise StateConflictError(message=f"人员编号 '{code}' 已存在")
@@ -479,10 +502,11 @@ def list_shift_defs(db: Session, org_unit_id: int) -> list[ShiftDef]:
 
 
 def create_shift_def(
-    db: Session, org_unit_id: int, code: str, name: str,
+    db: Session, org_unit_id: int, code: str | None, name: str,
     start_time: str, end_time: str,
     display_order: int = 0,
 ) -> ShiftDef:
+    code = code or _generate_unique_code(db, ShiftDef, "shift", ShiftDef.org_unit_id == org_unit_id)
     existing = db.scalars(
         select(ShiftDef)
         .where(ShiftDef.org_unit_id == org_unit_id)
@@ -672,7 +696,7 @@ def _create_rule_version(
 
 
 def create_shift_rule(
-    db: Session, code: str, name: str,
+    db: Session, code: str | None, name: str,
     cycle_days: int = 6,
     start_date: str = "",
     persons_per_cell: int = 2,
@@ -680,6 +704,7 @@ def create_shift_rule(
     remark: str | None = None,
     days: list[dict] | None = None,
 ) -> ShiftRule:
+    code = code or _generate_unique_code(db, ShiftRule, "shift_rule")
     existing = db.scalars(select(ShiftRule).where(ShiftRule.code == code)).first()
     if existing:
         raise StateConflictError(message=f"规则编码 '{code}' 已存在")

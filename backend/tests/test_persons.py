@@ -61,6 +61,18 @@ class TestPersonApi:
         assert data["status"] == "enabled"
         assert data["participate_schedule"] is False
 
+    def test_create_person_without_code_generates_unique_code(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        first = api_client.post("/api/v1/persons", json={"name": "甲", "person_type": "duty_operator"}, headers=headers)
+        second = api_client.post("/api/v1/persons", json={"name": "乙", "person_type": "duty_operator"}, headers=headers)
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert first.json()["data"]["code"]
+        assert first.json()["data"]["code"] != second.json()["data"]["code"]
+
     def test_create_person_with_schedule(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
         resp = api_client.post(

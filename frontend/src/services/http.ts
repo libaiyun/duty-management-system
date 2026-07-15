@@ -40,6 +40,7 @@ export async function parseApiError(response: Response): Promise<ApiError> {
 interface HttpClientCallbacks {
   getToken?: () => string | null
   getCurrentRoomId?: () => number | null
+  refreshToken?: () => Promise<boolean>
   onUnauthorized?: () => void
 }
 
@@ -53,6 +54,8 @@ export class HttpClient {
   private readonly baseUrl: string
   private readonly fetcher: typeof fetch
   private callbacks: HttpClientCallbacks
+  private refreshPromise: Promise<boolean> | null = null
+  private hasNotifiedUnauthorized = false
 
   constructor(options: HttpClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
@@ -62,6 +65,7 @@ export class HttpClient {
 
   configureCallbacks(callbacks: HttpClientCallbacks): void {
     this.callbacks = callbacks
+    this.hasNotifiedUnauthorized = false
   }
 
   async get<T>(path: string): Promise<ApiResponse<T>> {
@@ -88,7 +92,12 @@ export class HttpClient {
     return this.request<PageResponse<T>>('GET', `${path}${separator}${query.toString()}`)
   }
 
-  private async request<T>(method: string, path: string, body?: unknown): Promise<ApiResponse<T>> {
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    hasRetried = false,
+  ): Promise<ApiResponse<T>> {
     const headers: Record<string, string> = {
       Accept: 'application/json',
     }
@@ -125,7 +134,11 @@ export class HttpClient {
 
     if (!response.ok) {
       if (response.status === 401) {
-        this.callbacks.onUnauthorized?.()
+        const refreshed = !hasRetried && path !== '/auth/refresh' && await this.refreshAccessToken()
+        if (refreshed) {
+          return this.request<T>(method, path, body, true)
+        }
+        this.notifyUnauthorized()
       }
       throw await parseApiError(response)
     }
@@ -140,6 +153,26 @@ export class HttpClient {
     }
 
     return data
+  }
+
+  private async refreshAccessToken(): Promise<boolean> {
+    if (!this.callbacks.refreshToken) return false
+    if (!this.refreshPromise) {
+      this.refreshPromise = this.callbacks.refreshToken()
+        .catch(() => false)
+        .finally(() => {
+          this.refreshPromise = null
+        })
+    }
+    const refreshed = await this.refreshPromise
+    if (refreshed) this.hasNotifiedUnauthorized = false
+    return refreshed
+  }
+
+  private notifyUnauthorized(): void {
+    if (this.hasNotifiedUnauthorized) return
+    this.hasNotifiedUnauthorized = true
+    this.callbacks.onUnauthorized?.()
   }
 
   private createUrl(path: string): string {

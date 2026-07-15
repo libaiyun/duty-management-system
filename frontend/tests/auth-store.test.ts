@@ -4,6 +4,7 @@ import { createAuthStore } from './helpers'
 import { httpClient } from '@/services/http'
 import { useAppStore } from '@/stores/app'
 import { usePermissionStore } from '@/stores/permission'
+import { useRoomContextStore } from '@/stores/room-context'
 
 const TOKEN_KEY = 'duty_access_token'
 const REFRESH_TOKEN_KEY = 'duty_refresh_token'
@@ -57,6 +58,41 @@ describe('useAuthStore', () => {
     expect(localStorage.getItem(USER_KEY)).toBe('管理员')
     const permStore = usePermissionStore()
     expect(permStore.permissions.has('system:user:manage')).toBe(true)
+  })
+
+  it('loads rooms after a system administrator logs in', async () => {
+    vi.spyOn(httpClient, 'post').mockResolvedValueOnce({
+      code: 'OK', message: 'success',
+      data: { access_token: 'at', refresh_token: 'rt', token_type: 'bearer' }, trace_id: '',
+    })
+    vi.spyOn(httpClient, 'get').mockResolvedValueOnce({
+      code: 'OK', message: 'success',
+      data: {
+        id: 1, username: 'admin', display_name: '管理员', status: 'enabled', permissions: [],
+        person_id: null, room_id: null, room_name: null, can_switch_room: true,
+      }, trace_id: '',
+    })
+    const store = createAuthStore()
+    const loadRooms = vi.spyOn(useRoomContextStore(), 'loadRooms').mockResolvedValue()
+
+    await store.login('admin', 'password123')
+
+    expect(loadRooms).toHaveBeenCalledOnce()
+  })
+
+  it('persists replacement tokens when refreshing access', async () => {
+    const store = createAuthStore()
+    store.refreshToken = 'old-refresh'
+    vi.spyOn(httpClient, 'post').mockResolvedValueOnce({
+      code: 'OK', message: 'success',
+      data: { access_token: 'new-access', refresh_token: 'new-refresh', token_type: 'bearer' }, trace_id: '',
+    })
+
+    await expect(store.refreshAccessToken()).resolves.toBe(true)
+
+    expect(store.accessToken).toBe('new-access')
+    expect(localStorage.getItem(TOKEN_KEY)).toBe('new-access')
+    expect(localStorage.getItem(REFRESH_TOKEN_KEY)).toBe('new-refresh')
   })
 
   it('logout clears state', async () => {

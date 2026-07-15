@@ -81,7 +81,7 @@
     >
       <el-form ref="formRef" :model="formData" :rules="formRules" label-position="top">
         <el-form-item label="编码" prop="code">
-          <el-input v-model="formData.code" :disabled="!!editingUnit" />
+          <el-input v-model="formData.code" :disabled="!!editingUnit" placeholder="留空自动生成" />
         </el-form-item>
         <el-form-item label="名称" prop="name">
           <el-input v-model="formData.name" />
@@ -178,7 +178,6 @@ const formData = ref({
   manager_person_id: null as number | null,
 })
 const formRules: FormRules = {
-  code: [{ required: true, message: '请输入编码' }],
   name: [{ required: true, message: '请输入名称' }],
 }
 
@@ -267,7 +266,7 @@ async function save() {
       ElMessage.success('编辑成功')
     } else {
       await httpClient.post('/org-units', {
-        code: formData.value.code,
+        ...(formData.value.code ? { code: formData.value.code } : {}),
         name: formData.value.name,
         type: formData.value.type,
         parent_id: formData.value.parent_id,

@@ -63,6 +63,81 @@ describe('HttpClient callbacks', () => {
     expect(onUnauthorized).toHaveBeenCalledOnce()
   })
 
+  it('refreshes once and retries a normal 401 request with the replacement token', async () => {
+    let token = 'expired-token'
+    const refreshToken = vi.fn().mockImplementation(async () => {
+      token = 'replacement-token'
+      return true
+    })
+    const onUnauthorized = vi.fn()
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(makeMockResponse(401, { code: 'UNAUTHORIZED', message: '', trace_id: '' }))
+      .mockResolvedValueOnce(makeMockResponse(200, { code: 'OK', message: 'ok', data: null, trace_id: '' }))
+    const client = new HttpClient({
+      baseUrl: '/api/v1', fetcher,
+      callbacks: { getToken: () => token, refreshToken, onUnauthorized },
+    })
+
+    await client.get(authUrl)
+
+    expect(refreshToken).toHaveBeenCalledOnce()
+    expect(onUnauthorized).not.toHaveBeenCalled()
+    expect((fetcher.mock.calls[1][1] as RequestInit).headers).toMatchObject({
+      Authorization: 'Bearer replacement-token',
+    })
+  })
+
+  it('only refreshes once before forcing logout when the retry is also unauthorized', async () => {
+    const refreshToken = vi.fn().mockResolvedValue(true)
+    const onUnauthorized = vi.fn()
+    const fetcher = vi.fn().mockResolvedValue(
+      makeMockResponse(401, { code: 'UNAUTHORIZED', message: '', trace_id: '' }),
+    )
+    const client = new HttpClient({
+      baseUrl: '/api/v1', fetcher,
+      callbacks: { getToken: () => 'expired-token', refreshToken, onUnauthorized },
+    })
+
+    await expect(client.get(authUrl)).rejects.toThrow()
+
+    expect(refreshToken).toHaveBeenCalledOnce()
+    expect(onUnauthorized).toHaveBeenCalledOnce()
+  })
+
+  it('forces logout when token refresh fails', async () => {
+    const refreshToken = vi.fn().mockResolvedValue(false)
+    const onUnauthorized = vi.fn()
+    const fetcher = vi.fn().mockResolvedValue(
+      makeMockResponse(401, { code: 'UNAUTHORIZED', message: '', trace_id: '' }),
+    )
+    const client = new HttpClient({
+      baseUrl: '/api/v1', fetcher,
+      callbacks: { refreshToken, onUnauthorized },
+    })
+
+    await expect(client.get(authUrl)).rejects.toThrow()
+
+    expect(refreshToken).toHaveBeenCalledOnce()
+    expect(onUnauthorized).toHaveBeenCalledOnce()
+  })
+
+  it('shares one refresh attempt across concurrent unauthorized requests', async () => {
+    let resolveRefresh!: (result: boolean) => void
+    const refreshToken = vi.fn(() => new Promise<boolean>((resolve) => { resolveRefresh = resolve }))
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(makeMockResponse(401, { code: 'UNAUTHORIZED', message: '', trace_id: '' }))
+      .mockResolvedValueOnce(makeMockResponse(401, { code: 'UNAUTHORIZED', message: '', trace_id: '' }))
+      .mockResolvedValue(makeMockResponse(200, { code: 'OK', message: 'ok', data: null, trace_id: '' }))
+    const client = new HttpClient({ baseUrl: '/api/v1', fetcher, callbacks: { refreshToken } })
+
+    const requests = Promise.all([client.get('/first'), client.get('/second')])
+    await vi.waitFor(() => expect(refreshToken).toHaveBeenCalledOnce())
+    resolveRefresh(true)
+    await requests
+
+    expect(refreshToken).toHaveBeenCalledOnce()
+  })
+
   it('configureCallbacks updates callback references', async () => {
     const fetcher = vi.fn().mockResolvedValueOnce(
       makeMockResponse(200, { code: 'OK', message: 'ok', data: null, trace_id: '' }),
