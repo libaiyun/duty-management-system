@@ -20,6 +20,7 @@ from app.schemas.schedule import (
 from app.services.schedule import (
     generate_schedule_from_rule,
     get_schedule,
+    get_schedule_counts,
     get_schedule_days,
     get_schedule_days_by_range,
     list_schedules,
@@ -28,20 +29,26 @@ from app.services.schedule import (
 router = APIRouter(prefix="/schedules", tags=["schedules"])
 
 
-def _build_schedule_response(schedule: MonthlySchedule) -> ScheduleResponse:
+def _build_schedule_response(
+    schedule: MonthlySchedule,
+    counts: tuple[int, int, int] | None = None,
+) -> ScheduleResponse:
     org = schedule.org_unit
     rule = schedule.rule
-    days = schedule.days
-    day_count = len(days) if days else 0
-    shift_count = 0
-    person_count = 0
-    if days:
-        for d in days:
-            shifts = d.shifts if d.shifts else []
-            shift_count += len(shifts)
-            for sh in shifts:
-                persons = sh.persons if sh.persons else []
-                person_count += len(persons)
+    if counts is not None:
+        day_count, shift_count, person_count = counts
+    else:
+        days = schedule.days
+        day_count = len(days) if days else 0
+        shift_count = 0
+        person_count = 0
+        if days:
+            for d in days:
+                shifts = d.shifts if d.shifts else []
+                shift_count += len(shifts)
+                for sh in shifts:
+                    persons = sh.persons if sh.persons else []
+                    person_count += len(persons)
     return ScheduleResponse(
         id=schedule.id,
         org_unit_id=schedule.org_unit_id,
@@ -126,7 +133,8 @@ def list_schedules_endpoint(
         offset=paging.offset,
         limit=paging.page_size,
     )
-    items = [_build_schedule_response(s) for s in schedules]
+    counts = get_schedule_counts(db, [schedule.id for schedule in schedules])
+    items = [_build_schedule_response(s, counts.get(s.id)) for s in schedules]
     return ok(PageResponse.create(items=items, total=total, params=paging))
 
 
@@ -153,6 +161,10 @@ def get_schedule_days_endpoint(
     schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
     if (year is None) != (month is None):
         raise BusinessRuleError(message="year 和 month 必须同时传入")
+    if year is not None and not 1 <= year <= 9999:
+        raise BusinessRuleError(message="year 必须在 1 到 9999 之间")
+    if month is not None and not 1 <= month <= 12:
+        raise BusinessRuleError(message="month 必须在 1 到 12 之间")
     days = get_schedule_days(db, id, year=year, month=month)
     return ok([_build_day_response(d) for d in days])
 
@@ -169,6 +181,8 @@ def get_schedule_days_range_endpoint(
     schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
     if from_date > to_date:
         raise BusinessRuleError(message="起始日期不能晚于结束日期")
+    if (to_date - from_date).days > 365:
+        raise BusinessRuleError(message="日期范围不能超过 366 天")
     days = get_schedule_days_by_range(db, id, from_date=from_date, to_date=to_date)
     return ok([_build_day_response(d) for d in days])
 

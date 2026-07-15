@@ -8,7 +8,8 @@ from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
 from app.models.schedule import MonthlySchedule
-from app.services.schedule import generate_schedule_from_rule, get_schedule_days
+from app.core.exceptions import BusinessRuleError
+from app.services.schedule import generate_schedule_from_rule, get_schedule_days, list_schedules
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -26,7 +27,7 @@ class TestEdgeCases:
         return org, [p1, p2], sd
 
     def test_generate_with_empty_items(self, db_session) -> None:
-        """M3-P1: 版本无 items 时返回 0"""
+        """M3-P1: 持久化版本无 items 时返回人类可读的业务错误"""
         org, persons, sd = self._setup(db_session)
         rule = ShiftRule(
             code="ec_empty", name="空items",
@@ -43,8 +44,31 @@ class TestEdgeCases:
         db_session.add(v)
         db_session.commit()
 
-        result = generate_schedule_from_rule(db_session, rule, v, total_days=5)
-        assert result == 0
+        with pytest.raises(BusinessRuleError, match="周期天数"):
+            generate_schedule_from_rule(db_session, rule, v, total_days=5)
+
+    def test_generate_with_incomplete_persisted_version_raises_business_error(self, db_session) -> None:
+        org, persons, sd = self._setup(db_session)
+        rule = ShiftRule(
+            code="ec_incomplete", name="不完整版本", cycle_days=2,
+            start_date="2027-01-01", persons_per_cell=1, org_unit_id=org.id,
+        )
+        db_session.add(rule)
+        db_session.flush()
+        version = ShiftRuleVersion(
+            rule_id=rule.id, version_no=1, cycle_days=2,
+            start_date="2027-01-01", persons_per_cell=1,
+            snapshot={"days": []}, status="published",
+        )
+        db_session.add(version)
+        db_session.flush()
+        db_session.add(ShiftRuleItem(
+            version_id=version.id, day_no=1, cell_persons={str(sd.id): [persons[0].id]},
+        ))
+        db_session.commit()
+
+        with pytest.raises(BusinessRuleError, match="周期天数"):
+            generate_schedule_from_rule(db_session, rule, version, total_days=0)
 
     def test_generate_without_org_unit(self, db_session) -> None:
         """M3-P1: 无 org_unit 时返回 0"""
@@ -264,3 +288,52 @@ class TestSchedulePermissions:
         # User tries to query C outside their scope
         schedules3, total3 = list_schedules(db_session, org_unit_ids={org_a.id}, org_unit_id=org_c.id)
         assert total3 == 0
+
+
+class TestSchedulePerformance:
+    def test_generation_preloads_shift_defs_and_existing_days(self, db_session, monkeypatch) -> None:
+        org, persons, sd = TestEdgeCases()._setup(db_session)
+        rule = ShiftRule(code="ec_bulk", name="批量生成", cycle_days=1, start_date="2027-01-01", persons_per_cell=1, org_unit_id=org.id)
+        db_session.add(rule)
+        db_session.flush()
+        version = ShiftRuleVersion(rule_id=rule.id, version_no=1, cycle_days=1, start_date="2027-01-01", persons_per_cell=1, snapshot={"days": []}, status="published")
+        db_session.add(version)
+        db_session.flush()
+        db_session.add(ShiftRuleItem(version_id=version.id, day_no=1, cell_persons={str(sd.id): [persons[0].id]}))
+        db_session.commit()
+
+        statements: list[str] = []
+        original_scalars = db_session.scalars
+
+        def track_scalars(statement, *args, **kwargs):
+            statements.append(str(statement))
+            return original_scalars(statement, *args, **kwargs)
+
+        monkeypatch.setattr(db_session, "scalars", track_scalars)
+        generate_schedule_from_rule(db_session, rule, version, total_days=10)
+
+        assert sum("FROM shift_def" in statement for statement in statements) == 1
+        assert sum("FROM schedule_day" in statement for statement in statements) == 1
+
+    def test_list_schedules_does_not_eagerly_load_schedule_tree(self, db_session, monkeypatch) -> None:
+        org, _persons, _sd = TestEdgeCases()._setup(db_session)
+        rule = ShiftRule(code="ec_summary", name="摘要", cycle_days=1, start_date="2027-01-01", persons_per_cell=1)
+        db_session.add(rule)
+        db_session.flush()
+        version = ShiftRuleVersion(rule_id=rule.id, version_no=1, cycle_days=1, start_date="2027-01-01", persons_per_cell=1, snapshot={"days": []})
+        db_session.add(version)
+        db_session.flush()
+        db_session.add(MonthlySchedule(org_unit_id=org.id, rule_id=rule.id, rule_version_id=version.id))
+        db_session.commit()
+
+        statements: list[str] = []
+        original_scalars = db_session.scalars
+
+        def track_scalars(statement, *args, **kwargs):
+            statements.append(str(statement))
+            return original_scalars(statement, *args, **kwargs)
+
+        monkeypatch.setattr(db_session, "scalars", track_scalars)
+        list_schedules(db_session, org_unit_id=org.id)
+
+        assert not any("FROM schedule_day" in statement for statement in statements)

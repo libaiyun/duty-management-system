@@ -30,6 +30,8 @@ def _create_admin(api_client: TestClient, db_session, select_room: bool = True) 
     permissions = [
         SysPermission(code="schedule:monthly:view", name="View Schedule", type="api"),
         SysPermission(code="schedule:monthly:generate", name="Generate Schedule", type="api"),
+        SysPermission(code="shift:rule:view", name="View Shift Rule", type="api"),
+        SysPermission(code="shift:rule:manage", name="Manage Shift Rule", type="api"),
     ]
     role = SysRole(code="admin-role", name="Admin")
     role.permissions.extend(permissions)
@@ -564,6 +566,18 @@ class TestScheduleDaysApi:
         )
         assert resp.status_code == 422
 
+    @pytest.mark.parametrize("query", ["year=0&month=1", "year=10000&month=1", "year=2026&month=0", "year=2026&month=13"])
+    def test_get_days_rejects_invalid_month_query(self, api_client: TestClient, db_session, query: str) -> None:
+        _, token = _create_admin(api_client, db_session)
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        ms = _build_full_schedule(db_session, org, rule, [], [])
+
+        response = api_client.get(f"/api/v1/schedules/{ms.id}/days?{query}", headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 422
+        assert response.json()["code"] == "BUSINESS_RULE_FAILED"
+
 
 class TestScheduleDaysRangeApi:
     """M3-P1-T2: 按日期范围查询日班次明细"""
@@ -622,6 +636,21 @@ class TestScheduleDaysRangeApi:
         )
         assert resp.status_code == 422
 
+    def test_get_days_range_rejects_span_over_366_days(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        ms = _build_full_schedule(db_session, org, rule, [], [])
+
+        response = api_client.get(
+            f"/api/v1/schedules/{ms.id}/days/range",
+            params={"from": "2026-01-01", "to": "2027-01-02"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 422
+        assert response.json()["code"] == "BUSINESS_RULE_FAILED"
+
     def test_get_days_range_schedule_not_found(self, api_client: TestClient, db_session) -> None:
         """M3-P1-T2: range 端点 404"""
         _, token = _create_admin(api_client, db_session)
@@ -653,6 +682,63 @@ class TestScheduleDaysRangeApi:
 
 class TestScheduleGenerateApi:
     """M3-P1-T4: 生成/刷新排班 API"""
+
+    def test_publish_then_month_and_range_apis_return_full_room_data(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room = db_session.scalar(select(OrgUnit).where(OrgUnit.type == "room"))
+        assert room is not None
+        shift = ShiftDef(org_unit_id=room.id, code="publish-read", name="发布读取班", start_time="08:00", end_time="16:00")
+        person = Person(code="PUBLISH-READ", name="完整值班员", person_type="duty_operator", org_unit_id=room.id, participate_schedule=True)
+        db_session.add_all([shift, person])
+        db_session.commit()
+        start_date = date.today() + timedelta(days=1)
+
+        created = api_client.post(
+            "/api/v1/shift-rules",
+            json={
+                "code": "publish_read_rule", "name": "发布读取规则", "cycle_days": 1,
+                "start_date": start_date.isoformat(), "persons_per_cell": 1,
+                "days": [{"day_no": 1, "cells": [{"shift_def_id": shift.id, "person_ids": [person.id]}]}],
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert created.status_code == 200
+        assert api_client.post(
+            f"/api/v1/shift-rules/{created.json()['data']['id']}/publish",
+            headers={"Authorization": f"Bearer {token}"},
+        ).status_code == 200
+
+        listed = api_client.get("/api/v1/schedules", headers={"Authorization": f"Bearer {token}"})
+        assert listed.status_code == 200
+        schedule = listed.json()["data"]["items"][0]
+        assert schedule["org_unit_id"] == room.id
+        assert schedule["day_count"] > 0
+        assert schedule["shift_count"] == schedule["day_count"]
+        assert schedule["person_count"] == schedule["day_count"]
+
+        month = api_client.get(
+            f"/api/v1/schedules/{schedule['id']}/days?year={start_date.year}&month={start_date.month}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        ranged = api_client.get(
+            f"/api/v1/schedules/{schedule['id']}/days/range",
+            params={"from": start_date.isoformat(), "to": start_date.isoformat()},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert month.status_code == 200
+        assert ranged.status_code == 200
+        day = ranged.json()["data"][0]
+        assert day["duty_date"] == start_date.isoformat()
+        published_shift = next(item for item in day["shifts"] if item["shift_def_code"] == shift.code)
+        assert published_shift["persons"] == [{
+            "id": published_shift["persons"][0]["id"],
+            "person_id": person.id,
+            "person_code": person.code,
+            "person_name": person.name,
+            "position_no": 1,
+            "source_type": "auto",
+            "remark": None,
+        }]
 
     def _setup_published_rule_with_schedule(self, db_session):
         from app.models.shift import ShiftRuleItem, ShiftRuleVersion
