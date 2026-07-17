@@ -94,8 +94,8 @@ class TestEdgeCases:
         result = generate_schedule_from_rule(db_session, rule, v)
         assert result == 0
 
-    def test_cell_persons_with_missing_shift_def(self, db_session) -> None:
-        """M3-P1: cell_persons 引用不存在 shift_def 时跳过"""
+    def test_cell_persons_with_missing_shift_def_is_rejected(self, db_session) -> None:
+        """M3-P1: cell_persons 不得引用不存在的班次。"""
         org, persons, sd = self._setup(db_session)
         rule = ShiftRule(
             code="ec_missing_sd", name="缺失班次",
@@ -117,8 +117,8 @@ class TestEdgeCases:
         }))
         db_session.commit()
 
-        result = generate_schedule_from_rule(db_session, rule, v, total_days=0)
-        assert result == 1  # total_days=0 means just start_date
+        with pytest.raises(BusinessRuleError, match="当前机房的启用班次"):
+            generate_schedule_from_rule(db_session, rule, v, total_days=0)
 
     def test_holidays_with_none_matching(self, db_session) -> None:
         """M3-P1: 无匹配节假日时 is_legal_holiday 为 False"""

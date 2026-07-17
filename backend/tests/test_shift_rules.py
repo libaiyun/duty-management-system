@@ -570,6 +570,78 @@ class TestShiftRuleValidation:
         assert response.status_code == 422
         assert response.json()["message"] == "当前机房未配置班次定义，无法设置排班规则。"
 
+    def test_create_rejects_nonexistent_shift_definition(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room = db_session.scalar(select(OrgUnit).where(OrgUnit.type == "room"))
+        assert room is not None
+        shift = db_session.scalar(select(ShiftDef).where(ShiftDef.org_unit_id == room.id))
+        persons = list(db_session.scalars(select(Person).where(Person.org_unit_id == room.id)).all())
+        assert shift is not None
+
+        response = api_client.post("/api/v1/shift-rules", json={
+            "code": "unknown_shift_rule", "name": "不存在班次", "cycle_days": 1,
+            "start_date": "2027-01-01", "persons_per_cell": 2,
+            "days": [{"day_no": 1, "cells": [
+                {"shift_def_id": shift.id, "person_ids": [persons[0].id, persons[1].id]},
+                {"shift_def_id": 99999, "person_ids": [persons[0].id, persons[1].id]},
+            ]}],
+        }, headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 422
+        assert "不属于当前机房的启用班次" in response.json()["message"]
+
+    def test_create_rejects_shift_definition_from_another_room(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room = db_session.scalar(select(OrgUnit).where(OrgUnit.type == "room"))
+        assert room is not None
+        shift = db_session.scalar(select(ShiftDef).where(ShiftDef.org_unit_id == room.id))
+        persons = list(db_session.scalars(select(Person).where(Person.org_unit_id == room.id)).all())
+        other_room = OrgUnit(code="other-rule-room", name="其他机房", type="room")
+        other_shift = ShiftDef(
+            org_unit=other_room, code="other_shift", name="其他班次", start_time="16:00", end_time="24:00",
+        )
+        db_session.add_all([other_room, other_shift])
+        db_session.commit()
+        assert shift is not None
+
+        response = api_client.post("/api/v1/shift-rules", json={
+            "code": "foreign_shift_rule", "name": "跨机房班次", "cycle_days": 1,
+            "start_date": "2027-01-01", "persons_per_cell": 2,
+            "days": [{"day_no": 1, "cells": [
+                {"shift_def_id": shift.id, "person_ids": [persons[0].id, persons[1].id]},
+                {"shift_def_id": other_shift.id, "person_ids": [persons[0].id, persons[1].id]},
+            ]}],
+        }, headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 422
+        assert "不属于当前机房的启用班次" in response.json()["message"]
+
+    def test_create_rejects_disabled_shift_definition(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        room = db_session.scalar(select(OrgUnit).where(OrgUnit.type == "room"))
+        assert room is not None
+        enabled_shift = db_session.scalar(select(ShiftDef).where(ShiftDef.org_unit_id == room.id))
+        disabled_shift = ShiftDef(
+            org_unit_id=room.id, code="disabled_rule_shift", name="停用班次",
+            start_time="16:00", end_time="24:00", status="disabled",
+        )
+        persons = list(db_session.scalars(select(Person).where(Person.org_unit_id == room.id)).all())
+        db_session.add(disabled_shift)
+        db_session.commit()
+        assert enabled_shift is not None
+
+        response = api_client.post("/api/v1/shift-rules", json={
+            "code": "disabled_shift_rule", "name": "停用班次", "cycle_days": 1,
+            "start_date": "2027-01-01", "persons_per_cell": 2,
+            "days": [{"day_no": 1, "cells": [
+                {"shift_def_id": enabled_shift.id, "person_ids": [persons[0].id, persons[1].id]},
+                {"shift_def_id": disabled_shift.id, "person_ids": [persons[0].id, persons[1].id]},
+            ]}],
+        }, headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 422
+        assert "不属于当前机房的启用班次" in response.json()["message"]
+
     def test_update_and_publish_reject_room_without_enabled_shift_defs(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
         created = api_client.post("/api/v1/shift-rules", json={

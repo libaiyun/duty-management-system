@@ -624,6 +624,11 @@ def _validate_cells(
                         message=f"第 {day_no} 天班次 {sid} 的人员 {pid} 不符合排班条件",
                     )
 
+        invalid = cell_shift_ids - expected_def_ids
+        if invalid:
+            raise BusinessRuleError(
+                message=f"第 {day_no} 天包含不属于当前机房的启用班次: {sorted(invalid)}",
+            )
         missing = expected_def_ids - cell_shift_ids
         if missing:
             raise BusinessRuleError(

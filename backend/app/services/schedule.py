@@ -265,6 +265,19 @@ def generate_schedule_from_rule(
         shift_def.id: shift_def
         for shift_def in db.scalars(select(ShiftDef).where(ShiftDef.id.in_(shift_def_ids))).all()
     }
+    invalid_shift_def_ids = sorted(
+        shift_def_id
+        for shift_def_id in shift_def_ids
+        if (
+            shift_def_id not in shift_defs
+            or shift_defs[shift_def_id].org_unit_id != rule.org_unit_id
+            or shift_defs[shift_def_id].status != "enabled"
+        )
+    )
+    if invalid_shift_def_ids:
+        raise BusinessRuleError(
+            message=f"规则包含不属于当前机房的启用班次: {invalid_shift_def_ids}",
+        )
 
     day_count = 0
     for current_date in dates_to_generate:
@@ -282,7 +295,7 @@ def generate_schedule_from_rule(
             shift_def_id = int(shift_def_id_str)
             shift_def = shift_defs.get(shift_def_id)
             if not shift_def:
-                continue
+                raise BusinessRuleError(message=f"规则包含不存在的班次: {shift_def_id}")
 
             shift_start = datetime.combine(
                 current_date,
