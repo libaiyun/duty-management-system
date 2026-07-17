@@ -832,7 +832,7 @@ class TestScheduleGenerateApi:
         )
         assert resp.status_code == 200
         data = resp.json()["data"]
-        assert data["status"] == "draft"
+        assert data["status"] == "published"
         assert data["generated_at"] is not None
         assert data["day_count"] > 0
 

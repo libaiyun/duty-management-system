@@ -79,13 +79,14 @@ class TestShiftRuleApi:
 
     def test_create_rule_with_days(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
+        future_start = (date.today() + timedelta(days=10)).isoformat()
         resp = api_client.post(
             "/api/v1/shift-rules",
             json={
                 "code": "rule_01",
                 "name": "广播发射台规则",
                 "cycle_days": 6,
-                "start_date": "2026-07-17",
+                "start_date": future_start,
                 "persons_per_cell": 2,
                 "days": _sample_days(),
             },
@@ -95,7 +96,7 @@ class TestShiftRuleApi:
         data = resp.json()["data"]
         assert data["code"] == "rule_01"
         assert data["cycle_days"] == 6
-        assert data["start_date"] == "2026-07-17"
+        assert data["start_date"] == future_start
         assert data["persons_per_cell"] == 2
         assert data["status"] == "draft"
         assert len(data["items"]) == 6
@@ -279,13 +280,14 @@ class TestShiftRuleApi:
 
     def test_publish_rule(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
+        future_start = (date.today() + timedelta(days=10)).isoformat()
         resp = api_client.post(
             "/api/v1/shift-rules",
             json={
                 "code": "rule_pub",
                 "name": "可发布规则",
                 "cycle_days": 6,
-                "start_date": "2026-07-17",
+                "start_date": future_start,
                 "persons_per_cell": 2,
                 "days": _sample_days(),
             },
