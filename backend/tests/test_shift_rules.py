@@ -6,6 +6,7 @@ from sqlalchemy import select
 
 from app.models.organization import OrgUnit
 from app.models.person import Person
+from app.models.schedule import MonthlySchedule
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
 from app.models.user import SysDataScope, SysPermission, SysRole
 from app.services.auth import create_shift_rule, create_user, publish_shift_rule, update_shift_rule
@@ -301,6 +302,47 @@ class TestShiftRuleApi:
         )
         assert resp.status_code == 200
         assert resp.json()["data"]["status"] == "published"
+
+    def test_publishing_another_rule_supersedes_previous_rule_and_updates_schedule(
+        self, api_client: TestClient, db_session,
+    ) -> None:
+        _, token = _create_admin(api_client, db_session)
+        first_start = (date.today() + timedelta(days=10)).isoformat()
+        second_start = (date.today() + timedelta(days=20)).isoformat()
+
+        first = api_client.post("/api/v1/shift-rules", json={
+            "code": "first_active_rule", "name": "原生效规则", "cycle_days": 1,
+            "start_date": first_start, "persons_per_cell": 2, "days": _sample_days(1),
+        }, headers={"Authorization": f"Bearer {token}"})
+        first_id = first.json()["data"]["id"]
+        assert api_client.post(
+            f"/api/v1/shift-rules/{first_id}/publish",
+            headers={"Authorization": f"Bearer {token}"},
+        ).status_code == 200
+
+        second = api_client.post("/api/v1/shift-rules", json={
+            "code": "second_active_rule", "name": "新生效规则", "cycle_days": 1,
+            "start_date": second_start, "persons_per_cell": 2, "days": _sample_days(1),
+        }, headers={"Authorization": f"Bearer {token}"})
+        second_id = second.json()["data"]["id"]
+        assert api_client.post(
+            f"/api/v1/shift-rules/{second_id}/publish",
+            headers={"Authorization": f"Bearer {token}"},
+        ).status_code == 200
+
+        first_rule = db_session.get(ShiftRule, first_id)
+        second_rule = db_session.get(ShiftRule, second_id)
+        first_version = db_session.scalar(select(ShiftRuleVersion).where(ShiftRuleVersion.rule_id == first_id))
+        second_version = db_session.scalar(select(ShiftRuleVersion).where(ShiftRuleVersion.rule_id == second_id))
+        schedule = db_session.scalar(select(MonthlySchedule))
+
+        assert first_rule is not None and first_rule.status == "superseded"
+        assert second_rule is not None and second_rule.status == "published"
+        assert first_version is not None and first_version.status == "published"
+        assert second_version is not None and second_version.status == "published"
+        assert schedule is not None
+        assert schedule.rule_id == second_id
+        assert schedule.rule_version_id == second_version.id
 
     def test_publish_without_days_fails(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
@@ -729,7 +771,8 @@ class TestShiftRuleValidation:
         edited = api_client.put(f"/api/v1/shift-rules/{rule_id}", json={"name": "已编辑", "days": payload["days"]}, headers={"Authorization": f"Bearer {token}"})
 
         assert edited.status_code == 200
-        assert edited.json()["data"]["status"] == "draft"
+        assert edited.json()["data"]["status"] == "published"
+        assert edited.json()["data"]["latest_version_status"] == "draft"
         assert api_client.post(f"/api/v1/shift-rules/{rule_id}/publish", headers={"Authorization": f"Bearer {token}"}).status_code == 200
 
     def test_updating_published_rule_start_date_creates_draft_snapshot(self, db_session) -> None:
@@ -761,7 +804,7 @@ class TestShiftRuleValidation:
             .where(ShiftRuleVersion.rule_id == rule.id)
             .order_by(ShiftRuleVersion.version_no)
         ))
-        assert rule.status == "draft"
+        assert rule.status == "published"
         assert [(version.status, version.start_date) for version in versions] == [
             ("published", original_start),
             ("draft", updated_start),

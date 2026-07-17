@@ -94,6 +94,7 @@ class ShiftRuleResponse(BaseModel):
     status: str
     remark: str | None = None
     latest_version_id: int | None = None
+    latest_version_status: str | None = None
     items: list[ShiftRuleItemResponse] = Field(default_factory=list)
 
     model_config = {"from_attributes": True}

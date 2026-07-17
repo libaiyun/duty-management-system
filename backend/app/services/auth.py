@@ -801,7 +801,10 @@ def update_shift_rule(
         _validate_start_date(rule.start_date)
         _validate_cells(db, rule, version_days)
         _create_rule_version(db, rule, version_days, status="draft")
-        rule.status = "draft"
+        # Keep the currently published version active until this draft version
+        # is explicitly published. A superseded rule becomes a draft candidate.
+        if rule.status == "superseded":
+            rule.status = "draft"
     db.flush()
     return rule
 
@@ -818,7 +821,9 @@ def delete_shift_rule(db: Session, rule_id: int) -> None:
 
 
 def publish_shift_rule(db: Session, rule_id: int) -> ShiftRule:
-    rule = db.get(ShiftRule, rule_id)
+    rule = db.scalars(
+        select(ShiftRule).where(ShiftRule.id == rule_id).with_for_update(),
+    ).first()
     if rule is None:
         raise NotFoundError(message="排班规则不存在")
     latest_version = db.scalars(
@@ -831,6 +836,8 @@ def publish_shift_rule(db: Session, rule_id: int) -> ShiftRule:
         raise BusinessRuleError(message="规则没有保存版本，请先保存")
     if latest_version.status != "draft":
         raise StateConflictError(message="当前版本已发布，请先修改再重新发布")
+    if rule.org_unit_id is None:
+        raise BusinessRuleError(message="排班规则未关联机房")
     _validate_cells(db, rule, [
         {
             "day_no": item.day_no,
@@ -841,6 +848,18 @@ def publish_shift_rule(db: Session, rule_id: int) -> ShiftRule:
         }
         for item in latest_version.items
     ])
+    # A room can retain several configurations, while exactly one can drive
+    # its schedule. Lock all current candidates before changing the status.
+    active_rules = list(db.scalars(
+        select(ShiftRule)
+        .where(ShiftRule.org_unit_id == rule.org_unit_id)
+        .where(ShiftRule.status == "published")
+        .where(ShiftRule.id != rule.id)
+        .with_for_update(),
+    ).all())
+    for active_rule in active_rules:
+        active_rule.status = "superseded"
+
     latest_version.status = "published"
     rule.status = "published"
     db.flush()
@@ -849,12 +868,7 @@ def publish_shift_rule(db: Session, rule_id: int) -> ShiftRule:
 
 
 def get_rule_latest_items(db: Session, rule_id: int) -> list[ShiftRuleItem]:
-    latest_version = db.scalars(
-        select(ShiftRuleVersion)
-        .where(ShiftRuleVersion.rule_id == rule_id)
-        .order_by(ShiftRuleVersion.version_no.desc())
-        .limit(1)
-    ).first()
+    latest_version = get_rule_latest_version(db, rule_id)
     if latest_version is None:
         return []
     return list(db.scalars(
@@ -862,3 +876,12 @@ def get_rule_latest_items(db: Session, rule_id: int) -> list[ShiftRuleItem]:
         .where(ShiftRuleItem.version_id == int(latest_version.id))  # type: ignore[arg-type]
         .order_by(ShiftRuleItem.day_no)
     ).all())
+
+
+def get_rule_latest_version(db: Session, rule_id: int) -> ShiftRuleVersion | None:
+    return db.scalars(
+        select(ShiftRuleVersion)
+        .where(ShiftRuleVersion.rule_id == rule_id)
+        .order_by(ShiftRuleVersion.version_no.desc())
+        .limit(1)
+    ).first()

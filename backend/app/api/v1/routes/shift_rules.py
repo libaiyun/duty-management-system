@@ -17,6 +17,7 @@ from app.services.auth import (
     create_shift_rule,
     delete_shift_rule,
     get_rule_latest_items,
+    get_rule_latest_version,
     get_shift_rule,
     list_shift_rules,
     publish_shift_rule,
@@ -37,6 +38,10 @@ def get_shift_rules(
     result = []
     for r in rules:
         resp = ShiftRuleResponse.model_validate(r)
+        latest_version = get_rule_latest_version(db, int(r.id))
+        if latest_version is not None:
+            resp.latest_version_id = int(latest_version.id)
+            resp.latest_version_status = latest_version.status
         latest = get_rule_latest_items(db, int(r.id))  # type: ignore[arg-type]
         resp.items = [ShiftRuleItemResponse.model_validate(i) for i in latest]
         result.append(resp)
@@ -62,6 +67,10 @@ def create_shift_rule_endpoint(
     )
     db.commit()
     resp = ShiftRuleResponse.model_validate(rule)
+    latest_version = get_rule_latest_version(db, int(rule.id))
+    if latest_version is not None:
+        resp.latest_version_id = int(latest_version.id)
+        resp.latest_version_status = latest_version.status
     items = get_rule_latest_items(db, int(rule.id))  # type: ignore[arg-type]
     resp.items = [ShiftRuleItemResponse.model_validate(i) for i in items]
     return ok(resp)
@@ -79,6 +88,10 @@ def get_shift_rule_endpoint(
     if rule is None:
         raise NotFoundError(message="排班规则不存在")
     resp = ShiftRuleResponse.model_validate(rule)
+    latest_version = get_rule_latest_version(db, rule_id)
+    if latest_version is not None:
+        resp.latest_version_id = int(latest_version.id)
+        resp.latest_version_status = latest_version.status
     items = get_rule_latest_items(db, rule_id)
     resp.items = [ShiftRuleItemResponse.model_validate(i) for i in items]
     return ok(resp)
@@ -107,6 +120,10 @@ def update_shift_rule_endpoint(
     )
     db.commit()
     resp = ShiftRuleResponse.model_validate(rule)
+    latest_version = get_rule_latest_version(db, rule_id)
+    if latest_version is not None:
+        resp.latest_version_id = int(latest_version.id)
+        resp.latest_version_status = latest_version.status
     items = get_rule_latest_items(db, rule_id)
     resp.items = [ShiftRuleItemResponse.model_validate(i) for i in items]
     return ok(resp)

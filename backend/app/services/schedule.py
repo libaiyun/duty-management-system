@@ -192,9 +192,15 @@ def generate_schedule_from_rule(
         return 0
 
     existing = db.scalars(
-        select(MonthlySchedule).where(MonthlySchedule.org_unit_id == rule.org_unit_id)
+        select(MonthlySchedule)
+        .where(MonthlySchedule.org_unit_id == rule.org_unit_id)
+        .with_for_update()
     ).first()
-    same_version = existing is not None and existing.rule_version_id == version.id
+    same_version = (
+        existing is not None
+        and existing.rule_id == rule.id
+        and existing.rule_version_id == version.id
+    )
     generated_at = datetime.now()
     ms = existing or MonthlySchedule(
         org_unit_id=rule.org_unit_id,
@@ -204,6 +210,13 @@ def generate_schedule_from_rule(
         generated_at=generated_at,
         published_at=generated_at,
     )
+    if existing is not None and not same_version:
+        # These references are a pair: a version must belong to its rule.
+        ms.rule_id = rule.id
+        ms.rule_version_id = version.id
+        ms.status = "published"
+        ms.generated_at = generated_at
+        ms.published_at = generated_at
     db.add(ms)
     db.flush()
 

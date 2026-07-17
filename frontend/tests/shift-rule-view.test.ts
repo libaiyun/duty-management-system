@@ -84,7 +84,7 @@ describe('ShiftRuleView', () => {
           code: 'OK',
           message: 'success',
           trace_id: '',
-          data: [{ id: 1, code: 'rule', name: '规则', cycle_days: 1, start_date: '2027-01-01', persons_per_cell: 1, status: 'draft', remark: null, latest_version_id: 2, items: [] }],
+          data: [{ id: 1, code: 'rule', name: '规则', cycle_days: 1, start_date: '2027-01-01', persons_per_cell: 1, status: 'published', remark: null, latest_version_id: 2, latest_version_status: 'draft', items: [] }],
         })
       }
       return Promise.resolve({ code: 'OK', message: 'success', trace_id: '', data: [] })

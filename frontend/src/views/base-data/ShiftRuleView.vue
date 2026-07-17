@@ -14,7 +14,7 @@
       <el-table-column label="操作" width="320" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openDialog(row)">编辑</el-button>
-          <el-button v-if="row.status === 'draft'" size="small" type="success" :loading="publishingId === row.id" @click="publish(row)">发布</el-button>
+          <el-button v-if="row.latest_version_status === 'draft'" size="small" type="success" :loading="publishingId === row.id" @click="publish(row)">{{ row.status === 'published' ? '重新发布' : '发布' }}</el-button>
           <el-button size="small" type="danger" @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>
@@ -54,11 +54,11 @@ import { httpClient, resolveErrorMessage } from '@/services/http'
 
 interface ShiftDefItem { id: number; code: string; name: string; start_time: string; end_time: string; display_order: number; status: string }
 interface ShiftRuleItem { id: number; day_no: number; cell_persons: Record<string, number[]> }
-interface ShiftRuleData { id: number; code: string; name: string; cycle_days: number; start_date: string; persons_per_cell: number; status: string; remark: string | null; latest_version_id: number | null; items: ShiftRuleItem[] }
+interface ShiftRuleData { id: number; code: string; name: string; cycle_days: number; start_date: string; persons_per_cell: number; status: string; remark: string | null; latest_version_id: number | null; latest_version_status: string | null; items: ShiftRuleItem[] }
 interface PersonItem { id: number; code: string; name: string; person_type: string; org_unit_id: number | null; participate_schedule: boolean; status: string }
 
-const STATUS_LABELS: Record<string, string> = { draft: '草稿', published: '已发布' }
-const STATUS_TAG: Record<string, string> = { draft: 'info', published: 'success' }
+const STATUS_LABELS: Record<string, string> = { draft: '草稿', published: '已发布', superseded: '已替换' }
+const STATUS_TAG: Record<string, string> = { draft: 'info', published: 'success', superseded: 'warning' }
 const shiftRules = ref<ShiftRuleData[]>([])
 const shiftDefs = ref<ShiftDefItem[]>([])
 const persons = ref<PersonItem[]>([])
@@ -121,7 +121,10 @@ async function save() {
   } catch (err) { ElMessage.error(resolveErrorMessage(err, '操作失败')) } finally { saving.value = false }
 }
 async function publish(rule: ShiftRuleData) {
-  try { await ElMessageBox.confirm('发布后规则立即生效，排班将自动生成。确认发布？', '发布确认') } catch { return }
+  const message = rule.status === 'published'
+    ? '重新发布将从规则起始日刷新排班。确认发布？'
+    : '发布后规则立即生效；当前生效规则将标记为已替换，排班将从规则起始日刷新。确认发布？'
+  try { await ElMessageBox.confirm(message, '发布确认') } catch { return }
   publishingId.value = rule.id
   try { await httpClient.post(`/shift-rules/${rule.id}/publish`); ElMessage.success('规则已发布'); await loadRules() } catch (err) { ElMessage.error(resolveErrorMessage(err, '发布失败')) } finally { publishingId.value = null }
 }

@@ -1,4 +1,4 @@
-from sqlalchemy import BigInteger, Date, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Date, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -50,6 +50,13 @@ class ShiftRule(BaseModel):
 
     __table_args__ = (
         UniqueConstraint("code", name="uq_shift_rule_code"),
+        Index(
+            "uq_shift_rule_one_published_per_room",
+            "org_unit_id",
+            unique=True,
+            postgresql_where=text("status = 'published' AND deleted_at IS NULL"),
+            sqlite_where=text("status = 'published' AND deleted_at IS NULL"),
+        ),
     )
 
 
