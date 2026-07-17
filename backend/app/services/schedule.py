@@ -149,7 +149,7 @@ def get_schedule_days_by_range(
     )
 
 
-def _load_holidays(db: Session, dates: list[date]) -> dict[date, str]:
+def get_legal_holidays(db: Session, dates: list[date]) -> dict[date, str]:
     """批量加载法定节假日，返回 {date: holiday_name} 映射"""
     if not dates:
         return {}
@@ -222,7 +222,7 @@ def generate_schedule_from_rule(
         all_dates.append(current_date)
         current_date += timedelta(days=1)
 
-    holiday_map = _load_holidays(db, all_dates)
+    holiday_map = get_legal_holidays(db, all_dates)
     future_dates = [current_date for current_date in all_dates if current_date >= tomorrow]
     existing_days = {
         day.duty_date: day

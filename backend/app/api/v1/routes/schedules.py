@@ -19,6 +19,7 @@ from app.schemas.schedule import (
 )
 from app.services.schedule import (
     generate_schedule_from_rule,
+    get_legal_holidays,
     get_schedule,
     get_schedule_counts,
     get_schedule_days,
@@ -95,13 +96,13 @@ def _build_shift_response(shift: ScheduleShift) -> ScheduleShiftResponse:
     )
 
 
-def _build_day_response(day: ScheduleDay) -> ScheduleDayResponse:
+def _build_day_response(day: ScheduleDay, holidays: dict[date, str]) -> ScheduleDayResponse:
     return ScheduleDayResponse(
         id=day.id,
         duty_date=day.duty_date,
         weekday=day.weekday,
-        is_legal_holiday=day.is_legal_holiday,
-        holiday_name=day.holiday_name,
+        is_legal_holiday=day.duty_date in holidays,
+        holiday_name=holidays.get(day.duty_date),
         shifts=[_build_shift_response(sh) for sh in (day.shifts or [])],
     )
 
@@ -166,7 +167,8 @@ def get_schedule_days_endpoint(
     if month is not None and not 1 <= month <= 12:
         raise BusinessRuleError(message="month 必须在 1 到 12 之间")
     days = get_schedule_days(db, id, year=year, month=month)
-    return ok([_build_day_response(d) for d in days])
+    holidays = get_legal_holidays(db, [day.duty_date for day in days])
+    return ok([_build_day_response(day, holidays) for day in days])
 
 
 @router.get("/{id}/days/range", response_model=ApiResponse[list[ScheduleDayResponse]])
@@ -184,7 +186,8 @@ def get_schedule_days_range_endpoint(
     if (to_date - from_date).days > 365:
         raise BusinessRuleError(message="日期范围不能超过 366 天")
     days = get_schedule_days_by_range(db, id, from_date=from_date, to_date=to_date)
-    return ok([_build_day_response(d) for d in days])
+    holidays = get_legal_holidays(db, [day.duty_date for day in days])
+    return ok([_build_day_response(day, holidays) for day in days])
 
 
 @router.post("/{id}/generate", response_model=ApiResponse[ScheduleResponse])

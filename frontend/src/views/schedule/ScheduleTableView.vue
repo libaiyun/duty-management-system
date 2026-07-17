@@ -1,7 +1,7 @@
 <template>
   <section class="schedule-table-view">
     <div class="schedule-table-view__header">
-      <div>
+      <div class="schedule-table-view__title">
         <h1>排班表</h1>
         <p v-if="roomContextStore.currentRoomName" class="schedule-table-view__room">
           {{ roomContextStore.currentRoomName }}
@@ -25,10 +25,10 @@
     />
 
     <div class="schedule-table-view__toolbar">
-      <el-button :icon="ArrowLeft" circle aria-label="上月" @click="changeMonth(-1)" />
+      <el-button :icon="ArrowLeft" circle size="small" aria-label="上月" @click="changeMonth(-1)" />
       <span class="schedule-table-view__month">{{ displayMonth }}</span>
-      <el-button :icon="ArrowRight" circle aria-label="下月" @click="changeMonth(1)" />
-      <el-radio-group v-model="viewMode" class="schedule-table-view__view-switch">
+      <el-button :icon="ArrowRight" circle size="small" aria-label="下月" @click="changeMonth(1)" />
+      <el-radio-group v-model="viewMode" size="small" class="schedule-table-view__view-switch">
         <el-radio-button value="calendar">日历</el-radio-button>
         <el-radio-button value="list">列表</el-radio-button>
       </el-radio-group>
@@ -53,7 +53,7 @@
                 class="schedule-table-view__shift"
               >
                 <strong>{{ shift.shift_def_name }}</strong>
-                <span>{{ personText(shift) }}</span>
+                <span :title="personText(shift)">{{ personText(shift) }}</span>
               </div>
               <div v-if="actionDate === data.day && isMyDay(data.day)" class="schedule-table-view__action-menu" @click.stop>
                 <el-button link type="primary" @click="showPlaceholder('换班')">发起换班</el-button>
@@ -296,30 +296,35 @@ function statusTagType(status: string): 'info' | 'success' | 'warning' {
 .schedule-table-view__header {
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 16px;
+  margin-bottom: 8px;
 }
 
-.schedule-table-view h1 { margin: 0; font-size: 24px; }
-.schedule-table-view__room { margin: 4px 0 0; color: var(--el-text-color-secondary); }
+.schedule-table-view__title { display: flex; align-items: baseline; gap: 8px; }
+.schedule-table-view h1 { margin: 0; font-size: 22px; }
+.schedule-table-view__room { margin: 0; color: var(--el-text-color-secondary); font-size: 14px; }
 .schedule-table-view__actions,
 .schedule-table-view__toolbar,
 .schedule-table-view__filters { gap: 12px; }
-.schedule-table-view__toolbar { margin-bottom: 16px; }
+.schedule-table-view__toolbar { margin-bottom: 8px; }
 .schedule-table-view__month { min-width: 110px; text-align: center; font-weight: 600; }
 .schedule-table-view__view-switch { margin-left: auto; }
 .schedule-table-view__alert { margin-bottom: 16px; }
-.schedule-table-view__calendar { background: #fff; padding: 8px 16px; }
-.schedule-table-view__day { position: relative; min-height: 130px; padding: 6px; border-radius: 4px; }
+.schedule-table-view__calendar { background: #fff; padding: 4px 8px; }
+.schedule-table-view__calendar :deep(.el-calendar__header) { display: none; }
+.schedule-table-view__calendar :deep(.el-calendar__body) { padding: 4px 0 0; }
+.schedule-table-view__calendar :deep(.el-calendar-table thead th) { padding: 4px 0; }
+.schedule-table-view__calendar :deep(.el-calendar-day) { height: 86px; padding: 2px; }
+.schedule-table-view__day { position: relative; min-height: 100%; padding: 3px 4px; border-radius: 4px; }
 .schedule-table-view__day--mine { background: #edf8ee; }
 .schedule-table-view__day--holiday { background: #fff0f0; }
 .schedule-table-view__day--mine.schedule-table-view__day--holiday { background: linear-gradient(135deg, #edf8ee 50%, #fff0f0 50%); }
 .schedule-table-view__day--other-month { opacity: .45; }
 .schedule-table-view__day--locked { opacity: .65; }
-.schedule-table-view__date { display: flex; justify-content: space-between; margin-bottom: 5px; font-weight: 600; }
-.schedule-table-view__date small { color: var(--el-color-danger); font-size: 11px; }
-.schedule-table-view__shift { display: flex; gap: 4px; font-size: 12px; line-height: 20px; overflow: hidden; white-space: nowrap; }
+.schedule-table-view__date { display: flex; justify-content: space-between; margin-bottom: 2px; font-size: 13px; font-weight: 600; line-height: 16px; }
+.schedule-table-view__date small { color: var(--el-color-danger); font-size: 10px; }
+.schedule-table-view__shift { display: flex; gap: 3px; font-size: 11px; line-height: 16px; overflow: hidden; white-space: nowrap; }
 .schedule-table-view__shift strong { color: var(--el-color-primary); flex: 0 0 auto; }
-.schedule-table-view__shift span { overflow: hidden; text-overflow: ellipsis; }
+.schedule-table-view__shift span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .schedule-table-view__action-menu { position: absolute; z-index: 2; right: 4px; bottom: 4px; display: flex; gap: 8px; padding: 2px 6px; border-radius: 4px; background: #fff; box-shadow: var(--el-box-shadow-light); }
 .schedule-table-view__filter-panel,
 .schedule-table-view__list-panel {
@@ -348,7 +353,6 @@ function statusTagType(status: string): 'info' | 'success' | 'warning' {
 
 @media (max-width: 900px) {
   .schedule-table-view__calendar { overflow-x: auto; min-width: 780px; }
-  .schedule-table-view__day { min-height: 112px; }
 }
 
 @media (max-width: 640px) {

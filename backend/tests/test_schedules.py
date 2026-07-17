@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.models.holiday import HolidayCalendar
 from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
@@ -426,6 +427,36 @@ class TestScheduleDaysApi:
                               headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
         assert resp.json()["data"] == []
+
+    def test_get_days_uses_current_enabled_holiday_calendar(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        org = _create_org(db_session)
+        rule = _create_rule(db_session)
+        early = _create_shift_def(db_session, "early", "早班")
+        person = _create_person(db_session, org, "P001", "张三")
+        schedule = _build_full_schedule(db_session, org, rule, [early], [person])
+        db_session.add(HolidayCalendar(
+            holiday_date=date(2026, 7, 1),
+            holiday_name="建党节",
+            year=2026,
+            is_legal=True,
+            status="enabled",
+        ))
+        stale_day = db_session.scalars(
+            select(ScheduleDay).where(ScheduleDay.schedule_id == schedule.id, ScheduleDay.duty_date == date(2026, 7, 1))
+        ).one()
+        stale_day.is_legal_holiday = False
+        stale_day.holiday_name = None
+        db_session.commit()
+
+        response = api_client.get(
+            f"/api/v1/schedules/{schedule.id}/days?year=2026&month=7",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        day = response.json()["data"][0]
+        assert day["is_legal_holiday"] is True
+        assert day["holiday_name"] == "建党节"
 
     def test_get_days_not_found(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
