@@ -1,9 +1,6 @@
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import select
-
 from app.models.holiday import HolidayCalendar
 from app.models.organization import OrgUnit
 from app.models.person import Person
@@ -11,6 +8,8 @@ from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, Sch
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleVersion
 from app.models.user import SysDataScope, SysPermission, SysRole
 from app.services.auth import create_user
+from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -112,7 +111,8 @@ def _create_person(db_session, org: OrgUnit, code: str = "P001", name: str = "å€
 def _build_full_schedule(db_session, org: OrgUnit, rule: ShiftRule, shift_defs: list[ShiftDef],
                          persons: list[Person], status: str = "draft") -> MonthlySchedule:
     # count existing versions to generate unique version_no
-    from sqlalchemy import select as sa_select, func
+    from sqlalchemy import func
+    from sqlalchemy import select as sa_select
     existing_versions = db_session.scalar(
         sa_select(func.count()).select_from(ShiftRuleVersion.__table__)
         .where(ShiftRuleVersion.rule_id == rule.id)
@@ -202,6 +202,7 @@ class TestScheduleListApi:
         assert s["shift_count"] == 3
         assert s["person_count"] == 6
         assert s["generated_at"] is not None
+        assert s["coverage_through"] == "2026-07-03"
 
     def test_list_filter_by_status(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)

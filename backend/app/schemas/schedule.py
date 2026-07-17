@@ -19,6 +19,7 @@ class ScheduleResponse(BaseModel):
     day_count: int = 0
     shift_count: int = 0
     person_count: int = 0
+    coverage_through: date | None = None
 
     model_config = {"from_attributes": True}
 

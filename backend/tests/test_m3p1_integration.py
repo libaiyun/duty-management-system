@@ -1,15 +1,20 @@
 """M3-P1 integration tests: exceptions, boundaries, permissions, edge cases"""
 
-from datetime import date as _date, datetime, timedelta
+from datetime import date as _date
+from datetime import timedelta
 
 import pytest
-
+from app.core.exceptions import BusinessRuleError
 from app.models.organization import OrgUnit
 from app.models.person import Person
+from app.models.schedule import (
+    MonthlySchedule,
+    ScheduleDay,
+    ScheduleShift,
+    ScheduleShiftPerson,
+)
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
-from app.models.schedule import MonthlySchedule
-from app.core.exceptions import BusinessRuleError
-from app.services.schedule import generate_schedule_from_rule, get_schedule_days, list_schedules
+from app.services.schedule import generate_schedule_from_rule, list_schedules
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -138,7 +143,6 @@ class TestEdgeCases:
         db_session.commit()
 
         generate_schedule_from_rule(db_session, rule, v, total_days=3)
-        from app.models.schedule import ScheduleDay, MonthlySchedule
         ms = db_session.query(MonthlySchedule).filter(
             MonthlySchedule.org_unit_id == org.id
         ).first()
@@ -176,7 +180,6 @@ class TestEdgeCases:
         result = generate_schedule_from_rule(db_session, rule, v, total_days=60)
         assert result == 61  # from Jan 1 to Mar 2 inclusive = 61 days
 
-        from app.models.schedule import ScheduleDay, MonthlySchedule, ScheduleShift, ScheduleShiftPerson
         ms = db_session.query(MonthlySchedule).filter(
             MonthlySchedule.org_unit_id == org.id
         ).first()
@@ -217,6 +220,54 @@ class TestEdgeCases:
 
         result = generate_schedule_from_rule(db_session, rule, v, total_days=10)
         assert result > 0
+
+    def test_same_version_generation_extends_coverage_without_recreating_days(self, db_session) -> None:
+        """M3-P1: 重复生成同一版本时只追加缺失日期。"""
+        org, persons, sd = self._setup(db_session)
+        start_date = _date.today() + timedelta(days=1)
+        rule = ShiftRule(
+            code="ec_extend", name="滚动续期", cycle_days=1,
+            start_date=start_date.isoformat(), persons_per_cell=1, org_unit_id=org.id,
+        )
+        db_session.add(rule)
+        db_session.flush()
+        version = ShiftRuleVersion(
+            rule_id=rule.id, version_no=1, cycle_days=1,
+            start_date=start_date.isoformat(), persons_per_cell=1,
+            snapshot={"days": []}, status="published",
+        )
+        db_session.add(version)
+        db_session.flush()
+        db_session.add(ShiftRuleItem(
+            version_id=version.id, day_no=1, cell_persons={str(sd.id): [persons[0].id]},
+        ))
+        db_session.commit()
+
+        assert generate_schedule_from_rule(db_session, rule, version, total_days=2) == 3
+        schedule = db_session.query(MonthlySchedule).filter_by(org_unit_id=org.id).one()
+        first_day = db_session.query(ScheduleDay).filter_by(
+            schedule_id=schedule.id, duty_date=start_date,
+        ).one()
+
+        assert generate_schedule_from_rule(
+            db_session, rule, version, through_date=start_date + timedelta(days=375),
+        ) == 373
+        assert db_session.query(ScheduleDay).filter_by(schedule_id=schedule.id).count() == 376
+        assert db_session.query(ScheduleDay).filter_by(
+            schedule_id=schedule.id, duty_date=start_date,
+        ).one().id == first_day.id
+
+        assert generate_schedule_from_rule(
+            db_session, rule, version, through_date=start_date + timedelta(days=375),
+        ) == 0
+
+        generated_at = schedule.generated_at
+        published_at = schedule.published_at
+        assert generate_schedule_from_rule(
+            db_session, rule, version, through_date=start_date + timedelta(days=375),
+        ) == 0
+        assert schedule.generated_at == generated_at
+        assert schedule.published_at == published_at
 
 
 class TestSchedulePermissions:

@@ -20,7 +20,6 @@ from app.schemas.schedule import (
 from app.services.schedule import (
     generate_schedule_from_rule,
     get_legal_holidays,
-    get_schedule,
     get_schedule_counts,
     get_schedule_days,
     get_schedule_days_by_range,
@@ -32,12 +31,12 @@ router = APIRouter(prefix="/schedules", tags=["schedules"])
 
 def _build_schedule_response(
     schedule: MonthlySchedule,
-    counts: tuple[int, int, int] | None = None,
+    counts: tuple[int, int, int, date | None] | None = None,
 ) -> ScheduleResponse:
     org = schedule.org_unit
     rule = schedule.rule
     if counts is not None:
-        day_count, shift_count, person_count = counts
+        day_count, shift_count, person_count, coverage_through = counts
     else:
         days = schedule.days
         day_count = len(days) if days else 0
@@ -50,6 +49,7 @@ def _build_schedule_response(
                 for sh in shifts:
                     persons = sh.persons if sh.persons else []
                     person_count += len(persons)
+        coverage_through = max((day.duty_date for day in days), default=None)
     return ScheduleResponse(
         id=schedule.id,
         org_unit_id=schedule.org_unit_id,
@@ -66,6 +66,7 @@ def _build_schedule_response(
         day_count=day_count,
         shift_count=shift_count,
         person_count=person_count,
+        coverage_through=coverage_through,
     )
 
 
@@ -108,7 +109,7 @@ def _build_day_response(day: ScheduleDay, holidays: dict[date, str]) -> Schedule
 
 
 def _get_scoped_schedule(db: Session, schedule_id: int, room_id: int) -> MonthlySchedule:
-    schedule = get_schedule(db, schedule_id)
+    schedule = db.scalar(select(MonthlySchedule).where(MonthlySchedule.id == schedule_id))
     if schedule is None:
         raise NotFoundError(message="排班记录不存在")
 
@@ -147,7 +148,7 @@ def get_schedule_endpoint(
     user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
 ) -> ApiResponse[ScheduleResponse]:
     schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
-    return ok(_build_schedule_response(schedule))
+    return ok(_build_schedule_response(schedule, get_schedule_counts(db, [schedule.id]).get(schedule.id)))
 
 
 @router.get("/{id}/days", response_model=ApiResponse[list[ScheduleDayResponse]])
@@ -159,7 +160,7 @@ def get_schedule_days_endpoint(
     db: Session = Depends(get_db),
     user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
 ) -> ApiResponse[list[ScheduleDayResponse]]:
-    schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
+    _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
     if (year is None) != (month is None):
         raise BusinessRuleError(message="year 和 month 必须同时传入")
     if year is not None and not 1 <= year <= 9999:
@@ -180,7 +181,7 @@ def get_schedule_days_range_endpoint(
     db: Session = Depends(get_db),
     user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
 ) -> ApiResponse[list[ScheduleDayResponse]]:
-    schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
+    _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
     if from_date > to_date:
         raise BusinessRuleError(message="起始日期不能晚于结束日期")
     if (to_date - from_date).days > 365:
@@ -194,6 +195,7 @@ def get_schedule_days_range_endpoint(
 def generate_schedule_endpoint(
     id: int,
     request: Request,
+    through: date | None = Query(None),
     db: Session = Depends(get_db),
     user: SysUser = Depends(RequirePermission("schedule:monthly:generate")),
 ) -> ApiResponse[ScheduleResponse]:
@@ -213,7 +215,7 @@ def generate_schedule_endpoint(
     if latest_version is None:
         raise BusinessRuleError(message="规则没有已发布的版本")
 
-    generate_schedule_from_rule(db, rule, latest_version)
+    generate_schedule_from_rule(db, rule, latest_version, through_date=through)
     db.commit()
     db.refresh(schedule)
-    return ok(_build_schedule_response(schedule))
+    return ok(_build_schedule_response(schedule, get_schedule_counts(db, [schedule.id]).get(schedule.id)))

@@ -128,6 +128,7 @@ import { useRoomContextStore } from '@/stores/room-context'
 interface ScheduleItem {
   id: number
   status: string
+  coverage_through: string | null
 }
 
 interface SchedulePerson {
@@ -206,6 +207,11 @@ async function loadSchedule(): Promise<void> {
     schedule.value = listResponse.data.items[0] || null
     if (!schedule.value) return
     const [year, month] = monthKey.value.split('-')
+    const monthEnd = new Date(Number(year), Number(month), 0)
+    const through = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`
+    if (!schedule.value.coverage_through || schedule.value.coverage_through < through) {
+      await httpClient.post(`/schedules/${schedule.value.id}/generate?through=${through}`)
+    }
     const daysResponse = await httpClient.get<ScheduleDay[]>(`/schedules/${schedule.value.id}/days?year=${year}&month=${Number(month)}`)
     days.value = daysResponse.data
   } catch (error) {

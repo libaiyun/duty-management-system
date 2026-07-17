@@ -10,7 +10,7 @@ import { createTestPinia } from './helpers'
 import ScheduleTableView from '@/views/schedule/ScheduleTableView.vue'
 
 vi.mock('@/services/http', () => ({
-  httpClient: { get: vi.fn() },
+  httpClient: { get: vi.fn(), post: vi.fn() },
   resolveErrorMessage: vi.fn((_error: unknown, fallback: string) => fallback),
 }))
 
@@ -28,7 +28,7 @@ const days = [
   },
 ]
 
-async function mountView() {
+async function mountView(coverageThrough = '2099-12-31') {
   const pinia = createTestPinia()
   const authStore = useAuthStore()
   authStore.personId = 11
@@ -39,10 +39,11 @@ async function mountView() {
 
   vi.mocked(httpClient.get).mockImplementation((path: string) => {
     if (path.startsWith('/schedules?')) {
-      return Promise.resolve({ code: 'OK', message: 'success', data: { items: [{ id: 99, status: 'published' }] }, trace_id: '' })
+      return Promise.resolve({ code: 'OK', message: 'success', data: { items: [{ id: 99, status: 'published', coverage_through: coverageThrough }] }, trace_id: '' })
     }
     return Promise.resolve({ code: 'OK', message: 'success', data: days, trace_id: '' })
   })
+  vi.mocked(httpClient.post).mockResolvedValue({ code: 'OK', message: 'success', data: {}, trace_id: '' })
 
   const wrapper = mount(ScheduleTableView, {
     global: { plugins: [pinia, appRouter, ElementPlus] },
@@ -60,10 +61,16 @@ describe('ScheduleTableView', () => {
     expect(wrapper.find('.schedule-calendar-view__filter-room').exists()).toBe(false)
   })
 
-  it('loads the selected room schedule and monthly days', async () => {
+  it('loads an already covered month without generating it again', async () => {
     await mountView()
     expect(httpClient.get).toHaveBeenCalledWith('/schedules?org_unit_id=1')
+    expect(httpClient.post).not.toHaveBeenCalled()
     expect(httpClient.get).toHaveBeenCalledWith(expect.stringContaining('/schedules/99/days?year='))
+  })
+
+  it('extends coverage before loading an uncovered month', async () => {
+    await mountView('2000-01-01')
+    expect(httpClient.post).toHaveBeenCalledWith(expect.stringMatching(/^\/schedules\/99\/generate\?through=\d{4}-\d{2}-\d{2}$/))
   })
 
   it('renders shift personnel in the calendar', async () => {

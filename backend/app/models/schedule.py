@@ -69,6 +69,14 @@ class ScheduleDay(BaseModel):
     __table_args__ = (
         Index("ix_schedule_day_schedule_id", "schedule_id"),
         Index("ix_schedule_day_duty_date", "duty_date"),
+        Index(
+            "uq_schedule_day_schedule_date",
+            "schedule_id",
+            "duty_date",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+            sqlite_where=text("deleted_at IS NULL"),
+        ),
     )
 
 

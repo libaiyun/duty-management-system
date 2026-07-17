@@ -1,12 +1,14 @@
 from datetime import date, datetime, timedelta
 
-from sqlalchemy import extract, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.exceptions import BusinessRuleError
 from app.models.holiday import HolidayCalendar
 from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
-from app.core.exceptions import BusinessRuleError
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
+
+SCHEDULE_MATERIALIZATION_DAYS = 365
 
 
 def list_schedules(
@@ -45,12 +47,16 @@ def list_schedules(
     return schedules, total
 
 
-def get_schedule_counts(db: Session, schedule_ids: list[int]) -> dict[int, tuple[int, int, int]]:
+def get_schedule_counts(db: Session, schedule_ids: list[int]) -> dict[int, tuple[int, int, int, date | None]]:
     """Return summary counts without loading each schedule's day/shift tree."""
     if not schedule_ids:
         return {}
     day_counts = (
-        select(ScheduleDay.schedule_id.label("schedule_id"), func.count().label("count"))
+        select(
+            ScheduleDay.schedule_id.label("schedule_id"),
+            func.count().label("count"),
+            func.max(ScheduleDay.duty_date).label("coverage_through"),
+        )
         .where(ScheduleDay.schedule_id.in_(schedule_ids))
         .group_by(ScheduleDay.schedule_id)
         .subquery()
@@ -74,6 +80,7 @@ def get_schedule_counts(db: Session, schedule_ids: list[int]) -> dict[int, tuple
         select(
             MonthlySchedule.id,
             func.coalesce(day_counts.c.count, 0),
+            day_counts.c.coverage_through,
             func.coalesce(shift_counts.c.count, 0),
             func.coalesce(person_counts.c.count, 0),
         )
@@ -82,7 +89,7 @@ def get_schedule_counts(db: Session, schedule_ids: list[int]) -> dict[int, tuple
         .outerjoin(shift_counts, shift_counts.c.schedule_id == MonthlySchedule.id)
         .outerjoin(person_counts, person_counts.c.schedule_id == MonthlySchedule.id)
     ).all()
-    return {row[0]: (row[1], row[2], row[3]) for row in rows}
+    return {row[0]: (row[1], row[3], row[4], row[2]) for row in rows}
 
 
 def get_schedule(db: Session, schedule_id: int) -> MonthlySchedule | None:
@@ -112,8 +119,9 @@ def get_schedule_days(
     )
 
     if year is not None and month is not None:
-        stmt = stmt.where(extract("year", ScheduleDay.duty_date) == year)
-        stmt = stmt.where(extract("month", ScheduleDay.duty_date) == month)
+        month_start = date(year, month, 1)
+        next_month_start = date(year + (month == 12), month % 12 + 1, 1)
+        stmt = stmt.where(ScheduleDay.duty_date >= month_start).where(ScheduleDay.duty_date < next_month_start)
 
     stmt = stmt.options(
         selectinload(ScheduleDay.shifts).options(
@@ -170,11 +178,15 @@ def generate_schedule_from_rule(
     rule: ShiftRule,
     version: ShiftRuleVersion,
     *,
-    total_days: int = 365,
+    total_days: int | None = None,
+    through_date: date | None = None,
 ) -> int:
-    """从已发布规则生成排班记录到 schedule_day / schedule_shift / schedule_shift_person。
+    """将已发布规则物化到指定日期，或保持未来一年的滚动覆盖。
 
-    Returns: 生成的天数。
+    ``total_days`` 仅保留给边界测试使用，生产调用以 ``through_date`` 或默认
+    滚动覆盖范围决定终止日期。
+
+    Returns: 新增的天数。
     """
     if rule.org_unit_id is None:
         return 0
@@ -182,6 +194,7 @@ def generate_schedule_from_rule(
     existing = db.scalars(
         select(MonthlySchedule).where(MonthlySchedule.org_unit_id == rule.org_unit_id)
     ).first()
+    same_version = existing is not None and existing.rule_version_id == version.id
     generated_at = datetime.now()
     ms = existing or MonthlySchedule(
         org_unit_id=rule.org_unit_id,
@@ -191,12 +204,6 @@ def generate_schedule_from_rule(
         generated_at=generated_at,
         published_at=generated_at,
     )
-    if existing:
-        ms.rule_version_id = version.id
-        ms.status = "published"
-        ms.generated_at = generated_at
-        ms.published_at = generated_at
-
     db.add(ms)
     db.flush()
 
@@ -213,25 +220,42 @@ def generate_schedule_from_rule(
 
     rule_start = date.fromisoformat(version.start_date)
     tomorrow = date.today() + timedelta(days=1)
-    gen_start = rule_start
-    gen_end = max(gen_start, tomorrow) + timedelta(days=total_days)
+    default_end = max(rule_start, tomorrow) + timedelta(days=SCHEDULE_MATERIALIZATION_DAYS)
+    if total_days is not None:
+        gen_end = max(rule_start, tomorrow) + timedelta(days=total_days)
+    else:
+        gen_end = max(default_end, through_date or default_end)
 
-    all_dates = []
-    current_date = gen_start
-    while current_date <= gen_end:
-        all_dates.append(current_date)
-        current_date += timedelta(days=1)
-
-    holiday_map = get_legal_holidays(db, all_dates)
-    future_dates = [current_date for current_date in all_dates if current_date >= tomorrow]
-    existing_days = {
-        day.duty_date: day
-        for day in db.scalars(
+    existing_days: dict[date, ScheduleDay] = {}
+    if same_version or existing is None:
+        existing_days = {
+            day.duty_date: day
+            for day in db.scalars(
+                select(ScheduleDay)
+                .where(ScheduleDay.schedule_id == ms.id)
+                .where(ScheduleDay.duty_date >= rule_start)
+                .where(ScheduleDay.duty_date <= gen_end)
+            ).all()
+        }
+    elif existing:
+        # A newly published version replaces its effective range, while dates before
+        # its start remain historical records.
+        for existing_day in db.scalars(
             select(ScheduleDay)
             .where(ScheduleDay.schedule_id == ms.id)
-            .where(ScheduleDay.duty_date.in_(future_dates))
-        ).all()
-    }
+            .where(ScheduleDay.duty_date >= rule_start)
+        ).all():
+            db.delete(existing_day)
+        db.flush()
+
+    dates_to_generate = []
+    current_date = rule_start
+    while current_date <= gen_end:
+        if current_date not in existing_days:
+            dates_to_generate.append(current_date)
+        current_date += timedelta(days=1)
+
+    holiday_map = get_legal_holidays(db, dates_to_generate)
     shift_def_ids = {
         int(shift_def_id)
         for item in items
@@ -243,17 +267,9 @@ def generate_schedule_from_rule(
     }
 
     day_count = 0
-    current_date = gen_start
-    while current_date <= gen_end:
+    for current_date in dates_to_generate:
         cycle_index = (current_date - rule_start).days % cycle_days
         item = items_by_day[cycle_index + 1]
-
-        existing_day = existing_days.get(current_date)
-        if existing_day:
-            if current_date < tomorrow:
-                current_date += timedelta(days=1)
-                continue
-            db.delete(existing_day)
 
         sday = ScheduleDay(
             schedule_id=ms.id,
@@ -299,7 +315,13 @@ def generate_schedule_from_rule(
         db.add(sday)
 
         day_count += 1
-        current_date += timedelta(days=1)
+
+    if existing and (not same_version or day_count):
+        ms.rule_id = rule.id
+        ms.rule_version_id = version.id
+        ms.status = "published"
+        ms.generated_at = generated_at
+        ms.published_at = generated_at
 
     db.flush()
     return day_count
