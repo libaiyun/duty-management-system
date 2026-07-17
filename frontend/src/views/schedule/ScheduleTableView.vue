@@ -68,34 +68,49 @@
     </div>
 
     <template v-else>
-      <div class="schedule-table-view__filters">
-        <el-date-picker
-          v-model="listDateRange"
-          type="daterange"
-          range-separator="至"
-          start-placeholder="开始日期"
-          end-placeholder="结束日期"
-          value-format="YYYY-MM-DD"
-        />
-        <el-select v-model="listShiftId" placeholder="班次" clearable>
-          <el-option v-for="shift in shiftColumns" :key="shift.id" :label="shift.name" :value="shift.id" />
-        </el-select>
-        <el-input v-model="personKeyword" placeholder="人员" clearable />
-      </div>
-      <el-table :data="filteredDays" v-loading="loading" border class="schedule-table-view__list">
+      <section class="schedule-table-view__filter-panel" aria-label="排班查询条件">
+        <div class="schedule-table-view__filter-heading">
+          <span>查询条件</span>
+          <el-button class="schedule-table-view__reset" link type="primary" @click="resetListFilters">重置</el-button>
+        </div>
+        <div class="schedule-table-view__filters">
+          <div class="schedule-table-view__filter-field schedule-table-view__filter-field--date">
+            <label>日期范围</label>
+            <el-date-picker v-model="listDateRange" type="daterange" range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期" value-format="YYYY-MM-DD" />
+          </div>
+          <div class="schedule-table-view__filter-field">
+            <label for="schedule-person">人员</label>
+            <el-input id="schedule-person" v-model="personKeyword" placeholder="输入人员姓名" clearable />
+          </div>
+        </div>
+      </section>
+      <section class="schedule-table-view__list-panel">
+        <div class="schedule-table-view__list-heading">
+          <span>排班明细</span>
+          <span class="schedule-table-view__result-count">共 {{ filteredDays.length }} 条</span>
+        </div>
+        <div class="schedule-table-view__table-wrap">
+          <el-table :data="filteredDays" v-loading="loading" border class="schedule-table-view__list">
         <el-table-column label="日期" width="120">
           <template #default="{ row }">
-            {{ row.duty_date }}
-            <el-tag v-if="row.is_legal_holiday" size="small" type="danger">{{ row.holiday_name || '节假日' }}</el-tag>
+            <span class="schedule-table-view__date-value">{{ row.duty_date }}</span>
           </template>
         </el-table-column>
         <el-table-column label="星期" width="72">
           <template #default="{ row }">{{ weekdayLabel(row.weekday) }}</template>
         </el-table-column>
+        <el-table-column label="节假日" width="110">
+          <template #default="{ row }">
+            <el-tag v-if="row.is_legal_holiday" size="small" type="danger">{{ row.holiday_name || '节假日' }}</el-tag>
+            <span v-else class="schedule-table-view__empty-value">-</span>
+          </template>
+        </el-table-column>
         <el-table-column v-for="shift in shiftColumns" :key="shift.id" :label="shift.name" min-width="160">
           <template #default="{ row }">{{ personText(shiftFor(row, shift.id)) }}</template>
         </el-table-column>
-      </el-table>
+          </el-table>
+        </div>
+      </section>
     </template>
   </section>
 </template>
@@ -145,7 +160,6 @@ const calendarDate = ref(new Date())
 const viewMode = ref<'calendar' | 'list'>('calendar')
 const actionDate = ref('')
 const listDateRange = ref<string[]>([])
-const listShiftId = ref<number | null>(null)
 const personKeyword = ref('')
 const loadError = ref('')
 
@@ -172,8 +186,7 @@ const emptyMessage = computed(() => {
 })
 const filteredDays = computed(() => days.value.filter((day) => {
   if (listDateRange.value.length === 2 && (day.duty_date < listDateRange.value[0] || day.duty_date > listDateRange.value[1])) return false
-  const matchedShifts = listShiftId.value ? day.shifts.filter((shift) => shift.shift_def_id === listShiftId.value) : day.shifts
-  return !personKeyword.value || matchedShifts.some((shift) => personText(shift).includes(personKeyword.value))
+  return !personKeyword.value || day.shifts.some((shift) => personText(shift).includes(personKeyword.value))
 }))
 
 onMounted(loadSchedule)
@@ -204,6 +217,11 @@ async function loadSchedule(): Promise<void> {
 
 function changeMonth(offset: number): void {
   calendarDate.value = new Date(calendarDate.value.getFullYear(), calendarDate.value.getMonth() + offset, 1)
+}
+
+function resetListFilters(): void {
+  listDateRange.value = []
+  personKeyword.value = ''
 }
 
 function dayFor(day: string): ScheduleDay | undefined {
@@ -268,7 +286,9 @@ function statusTagType(status: string): 'info' | 'success' | 'warning' {
 .schedule-table-view__header,
 .schedule-table-view__toolbar,
 .schedule-table-view__actions,
-.schedule-table-view__filters {
+.schedule-table-view__filters,
+.schedule-table-view__filter-heading,
+.schedule-table-view__list-heading {
   display: flex;
   align-items: center;
 }
@@ -301,11 +321,45 @@ function statusTagType(status: string): 'info' | 'success' | 'warning' {
 .schedule-table-view__shift strong { color: var(--el-color-primary); flex: 0 0 auto; }
 .schedule-table-view__shift span { overflow: hidden; text-overflow: ellipsis; }
 .schedule-table-view__action-menu { position: absolute; z-index: 2; right: 4px; bottom: 4px; display: flex; gap: 8px; padding: 2px 6px; border-radius: 4px; background: #fff; box-shadow: var(--el-box-shadow-light); }
-.schedule-table-view__filters { margin-bottom: 16px; flex-wrap: wrap; }
-.schedule-table-view__filters .el-input { width: 180px; }
+.schedule-table-view__filter-panel,
+.schedule-table-view__list-panel {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-bg-color);
+}
+.schedule-table-view__filter-panel { margin-bottom: 16px; padding: 14px 16px 16px; }
+.schedule-table-view__filter-heading,
+.schedule-table-view__list-heading { justify-content: space-between; font-weight: 600; }
+.schedule-table-view__filter-heading { margin-bottom: 14px; }
+.schedule-table-view__filters { gap: 16px 24px; flex-wrap: wrap; }
+.schedule-table-view__filter-field { display: grid; gap: 6px; min-width: 160px; }
+.schedule-table-view__filter-field label { color: var(--el-text-color-secondary); font-size: 13px; }
+.schedule-table-view__filter-field--date { min-width: 300px; }
+.schedule-table-view__filter-field .el-select,
+.schedule-table-view__filter-field .el-input { width: 180px; }
+.schedule-table-view__filter-field--date .el-date-editor { width: 300px; }
+.schedule-table-view__list-panel { overflow: hidden; }
+.schedule-table-view__list-heading { min-height: 52px; padding: 0 16px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.schedule-table-view__result-count { color: var(--el-text-color-secondary); font-size: 13px; font-weight: 400; }
+.schedule-table-view__table-wrap { overflow-x: auto; }
+.schedule-table-view__date-value { font-variant-numeric: tabular-nums; }
+.schedule-table-view__empty-value { color: var(--el-text-color-placeholder); }
+.schedule-table-view__list { min-width: 720px; }
 
 @media (max-width: 900px) {
   .schedule-table-view__calendar { overflow-x: auto; min-width: 780px; }
   .schedule-table-view__day { min-height: 112px; }
+}
+
+@media (max-width: 640px) {
+  .schedule-table-view__header { align-items: flex-start; }
+  .schedule-table-view__actions { flex-shrink: 0; }
+  .schedule-table-view__filter-panel { padding: 12px; }
+  .schedule-table-view__filter-field,
+  .schedule-table-view__filter-field--date,
+  .schedule-table-view__filter-field .el-select,
+  .schedule-table-view__filter-field .el-input,
+  .schedule-table-view__filter-field--date .el-date-editor { width: 100%; min-width: 0; }
+  .schedule-table-view__filters { display: grid; grid-template-columns: 1fr; }
 }
 </style>

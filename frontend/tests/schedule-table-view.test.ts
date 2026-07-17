@@ -97,6 +97,17 @@ describe('ScheduleTableView', () => {
     expect(wrapper.findComponent({ name: 'ElTable' }).exists()).toBe(true)
     expect(wrapper.text()).toContain('中班')
   })
+
+  it('shows a concise list query panel and the filtered result count', async () => {
+    const wrapper = await mountView()
+    await wrapper.find('input[value="list"]').setValue()
+    await flushPromises()
+
+    expect(wrapper.find('.schedule-table-view__filter-panel').exists()).toBe(true)
+    expect(wrapper.find('.schedule-table-view__result-count').text()).toContain('共 2 条')
+    expect(wrapper.find('button.schedule-table-view__reset').text()).toBe('重置')
+    expect(wrapper.find('#schedule-shift').exists()).toBe(false)
+  })
 })
 
 describe('ScheduleTableView route', () => {
