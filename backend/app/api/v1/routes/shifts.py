@@ -19,6 +19,8 @@ def get_shift_defs(
     user: SysUser = Depends(RequirePermission("shift:def:view")),
 ) -> ApiResponse[list[ShiftDefResponse]]:
     defs = list_shift_defs(db, resolve_current_room_id(request, db, user))
+    # Listing initializes defaults for a newly selected room, so persist them.
+    db.commit()
     return ok([ShiftDefResponse.model_validate(d) for d in defs])
 
 

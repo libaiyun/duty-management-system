@@ -75,6 +75,15 @@ class TestShiftDefApi:
             ("night", "晚班", "16:00", "24:00", 3),
         ]
 
+    def test_list_commits_initialized_default_shifts(self, api_client: TestClient, db_session, monkeypatch) -> None:
+        _, token = _create_admin(api_client, db_session)
+        commit = monkeypatch.spy(db_session, "commit")
+
+        response = api_client.get("/api/v1/shifts", headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 200
+        assert commit.call_count == 1
+
     def test_default_shifts_are_initialized_per_room(self, api_client: TestClient, db_session) -> None:
         user_id, token = _create_admin(api_client, db_session)
         second_room = OrgUnit(code="room-2", name="第二机房", type="room")
