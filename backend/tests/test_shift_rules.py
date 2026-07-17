@@ -714,6 +714,7 @@ class TestScheduleGeneration:
             MonthlySchedule.org_unit_id == org.id
         ).first()
         assert schedule is not None
+        assert schedule.status == "published"
         days = db_session.query(ScheduleDay).filter(
             ScheduleDay.schedule_id == schedule.id
         ).order_by(ScheduleDay.duty_date).all()

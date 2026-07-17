@@ -182,16 +182,20 @@ def generate_schedule_from_rule(
     existing = db.scalars(
         select(MonthlySchedule).where(MonthlySchedule.org_unit_id == rule.org_unit_id)
     ).first()
+    generated_at = datetime.now()
     ms = existing or MonthlySchedule(
         org_unit_id=rule.org_unit_id,
         rule_id=rule.id,
         rule_version_id=version.id,
-        status="draft",
-        generated_at=datetime.now(),
+        status="published",
+        generated_at=generated_at,
+        published_at=generated_at,
     )
     if existing:
         ms.rule_version_id = version.id
-        ms.generated_at = datetime.now()
+        ms.status = "published"
+        ms.generated_at = generated_at
+        ms.published_at = generated_at
 
     db.add(ms)
     db.flush()
