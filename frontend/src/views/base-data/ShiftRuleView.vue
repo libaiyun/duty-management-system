@@ -36,7 +36,7 @@
         <div v-if="form.cycle_days > 0" class="shift-rule-view__grid-container">
           <table class="shift-rule-view__grid-table">
             <thead><tr><th class="shift-rule-view__grid-day-header">天数 / 班次</th><th v-for="shift in enabledShiftDefs" :key="shift.id" class="shift-rule-view__grid-shift-header"><div>{{ shift.name }}</div><div class="shift-rule-view__grid-shift-time">{{ shift.start_time }}-{{ shift.end_time }}</div></th></tr></thead>
-            <tbody><tr v-for="dayNo in form.cycle_days" :key="dayNo"><td class="shift-rule-view__grid-day-label"><span class="shift-rule-view__grid-day-no">第 {{ dayNo }} 天</span><span class="shift-rule-view__grid-day-date">{{ computeDayDate(dayNo) }}</span></td><td v-for="shift in enabledShiftDefs" :key="shift.id" class="shift-rule-view__grid-cell"><el-select :model-value="getCellPersons(dayNo, shift.id)" @update:model-value="(value: number[]) => setCellPersons(dayNo, shift.id, value)" multiple filterable placeholder="选择人员" style="width: 100%"><el-option v-for="person in availablePersons" :key="person.id" :label="person.name" :value="person.id" /></el-select></td></tr></tbody>
+            <tbody><tr v-for="dayNo in form.cycle_days" :key="dayNo"><td class="shift-rule-view__grid-day-label"><span class="shift-rule-view__grid-day-no">第 {{ dayNo }} 天</span><span class="shift-rule-view__grid-day-date">{{ computeDayDate(dayNo) }}</span></td><td v-for="shift in enabledShiftDefs" :key="shift.id" class="shift-rule-view__grid-cell"><el-select v-for="slotNo in form.persons_per_cell" :key="slotNo" :model-value="getCellPerson(dayNo, shift.id, slotNo)" @update:model-value="(value: number) => setCellPerson(dayNo, shift.id, slotNo, value)" filterable placeholder="选择人员" style="width: 100%"><el-option v-for="person in availablePersons" :key="person.id" :label="person.name" :value="person.id" /></el-select></td></tr></tbody>
           </table>
         </div>
         <el-empty v-else description="请设置循环天数" />
@@ -93,7 +93,13 @@ async function loadPersons() {
 function disablePastDates(date: Date) { const today = new Date(); today.setHours(0, 0, 0, 0); return date <= today }
 function computeDayDate(dayNo: number) { if (!form.start_date) return ''; const date = new Date(form.start_date); date.setDate(date.getDate() + dayNo - 1); return `${date.getMonth() + 1}月${date.getDate()}日` }
 function getCellPersons(dayNo: number, shiftDefId: number) { return form.cellData[dayNo]?.[shiftDefId] ?? [] }
-function setCellPersons(dayNo: number, shiftDefId: number, personIds: number[]) { if (!form.cellData[dayNo]) form.cellData[dayNo] = {}; form.cellData[dayNo][shiftDefId] = personIds }
+function getCellPerson(dayNo: number, shiftDefId: number, slotNo: number) { return getCellPersons(dayNo, shiftDefId)[slotNo - 1] }
+function setCellPerson(dayNo: number, shiftDefId: number, slotNo: number, personId: number) {
+  if (!form.cellData[dayNo]) form.cellData[dayNo] = {}
+  const personIds = form.cellData[dayNo][shiftDefId] ?? []
+  personIds[slotNo - 1] = personId
+  form.cellData[dayNo][shiftDefId] = personIds
+}
 function formatDate(date: Date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}` }
 
 function openDialog(rule?: ShiftRuleData) {
@@ -103,7 +109,7 @@ function openDialog(rule?: ShiftRuleData) {
   dialogVisible.value = true
 }
 function resetForm() { editing.value = null; form.code = ''; form.name = ''; form.cycle_days = 6; form.start_date = null; form.persons_per_cell = 2; form.remark = ''; form.cellData = {}; formRef.value?.resetFields() }
-function buildDaysPayload() { return Array.from({ length: form.cycle_days }, (_, index) => ({ day_no: index + 1, cells: enabledShiftDefs.value.map((shift) => ({ shift_def_id: shift.id, person_ids: getCellPersons(index + 1, shift.id) })) })) }
+function buildDaysPayload() { return Array.from({ length: form.cycle_days }, (_, index) => ({ day_no: index + 1, cells: enabledShiftDefs.value.map((shift) => ({ shift_def_id: shift.id, person_ids: getCellPersons(index + 1, shift.id).slice(0, form.persons_per_cell).filter((personId): personId is number => typeof personId === 'number') })) })) }
 async function save() {
   const valid = await formRef.value?.validate().catch(() => false); if (!valid) return
   saving.value = true
@@ -128,13 +134,14 @@ async function remove(rule: ShiftRuleData) {
 <style scoped>
 .shift-rule-view h1 { margin: 0 0 16px; font-size: 24px; font-weight: 600; }
 .shift-rule-view__toolbar { margin-bottom: 16px; }
-.shift-rule-view__grid-container { overflow: auto; max-height: 500px; }
-.shift-rule-view__grid-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+.shift-rule-view__grid-container { overflow: auto; max-height: 500px; scrollbar-gutter: stable; }
+.shift-rule-view__grid-table { border-collapse: collapse; table-layout: fixed; width: 100%; font-size: 13px; }
 .shift-rule-view__grid-table th, .shift-rule-view__grid-table td { border: 1px solid #dcdfe6; padding: 8px; text-align: center; vertical-align: top; min-width: 120px; }
 .shift-rule-view__grid-day-header, .shift-rule-view__grid-shift-header { background: #f5f7fa; font-weight: 600; }
 .shift-rule-view__grid-day-header { min-width: 100px; }
 .shift-rule-view__grid-shift-time, .shift-rule-view__grid-day-date { display: block; font-size: 11px; color: #909399; font-weight: normal; }
 .shift-rule-view__grid-day-label { background: #fafafa; font-weight: 500; }
 .shift-rule-view__grid-day-no { display: block; }
-.shift-rule-view__grid-cell { min-width: 180px; }
+.shift-rule-view__grid-shift-header, .shift-rule-view__grid-cell { width: 180px; }
+.shift-rule-view__grid-cell .el-select + .el-select { margin-top: 8px; }
 </style>

@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import ElementPlus from 'element-plus'
+import ElementPlus, { ElSelect } from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -93,6 +93,25 @@ describe('ShiftRuleView', () => {
     wrapper = await mountView(ShiftRuleView)
 
     expect(wrapper.text()).toContain('发布')
+  })
+
+  it('renders one person selector per configured slot in each grid cell', async () => {
+    vi.mocked(httpClient.get).mockImplementation((url: string) => {
+      if (url === '/shifts') {
+        return Promise.resolve({ code: 'OK', message: 'success', trace_id: '', data: [
+          { id: 1, code: 'morning', name: '早班', start_time: '00:00', end_time: '08:00', display_order: 1, status: 'enabled' },
+          { id: 2, code: 'afternoon', name: '中班', start_time: '08:00', end_time: '16:00', display_order: 2, status: 'enabled' },
+        ] })
+      }
+      return Promise.resolve({ code: 'OK', message: 'success', trace_id: '', data: [] })
+    })
+    wrapper.unmount()
+    wrapper = await mountView(ShiftRuleView)
+
+    await wrapper.get('.shift-rule-view__toolbar button').trigger('click')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+
+    expect(wrapper.findAllComponents(ElSelect)).toHaveLength(24)
   })
 })
 
