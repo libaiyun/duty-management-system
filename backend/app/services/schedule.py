@@ -211,7 +211,7 @@ def generate_schedule_from_rule(
     if cycle_days < 1 or set(items_by_day) != set(range(1, cycle_days + 1)):
         raise BusinessRuleError(message="排班规则版本的周期天数与排班项不一致，请重新保存规则")
 
-    rule_start = date.fromisoformat(rule.start_date)
+    rule_start = date.fromisoformat(version.start_date)
     tomorrow = date.today() + timedelta(days=1)
     gen_start = rule_start
     gen_end = max(gen_start, tomorrow) + timedelta(days=total_days)

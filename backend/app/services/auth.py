@@ -695,6 +695,19 @@ def _create_rule_version(
     return v
 
 
+def _version_days(version: ShiftRuleVersion) -> list[dict]:
+    return [
+        {
+            "day_no": item.day_no,
+            "cells": [
+                {"shift_def_id": int(shift_def_id), "person_ids": person_ids}
+                for shift_def_id, person_ids in item.cell_persons.items()
+            ],
+        }
+        for item in version.items
+    ]
+
+
 def create_shift_rule(
     db: Session, code: str | None, name: str,
     cycle_days: int = 6,
@@ -752,6 +765,15 @@ def update_shift_rule(
     rule = db.get(ShiftRule, rule_id)
     if rule is None:
         raise NotFoundError(message="排班规则不存在")
+    schedule_config_changed = any(value is not None for value in (
+        cycle_days, start_date, persons_per_cell,
+    ))
+    latest_version = db.scalars(
+        select(ShiftRuleVersion)
+        .where(ShiftRuleVersion.rule_id == rule_id)
+        .order_by(ShiftRuleVersion.version_no.desc())
+        .limit(1),
+    ).first()
     if org_unit_id is not None:
         if db.get(OrgUnit, org_unit_id) is None:
             raise NotFoundError(message="组织不存在")
@@ -767,13 +789,13 @@ def update_shift_rule(
     if remark is not None:
         rule.remark = remark
     _validate_cells(db, rule, [])
-    if days is not None:
-        if start_date is not None:
-            _validate_start_date(rule.start_date)
-        else:
-            _validate_start_date(rule.start_date)
-        _validate_cells(db, rule, days)
-        _create_rule_version(db, rule, days, status="draft")
+    version_days = days
+    if version_days is None and schedule_config_changed and latest_version is not None:
+        version_days = _version_days(latest_version)
+    if version_days is not None:
+        _validate_start_date(rule.start_date)
+        _validate_cells(db, rule, version_days)
+        _create_rule_version(db, rule, version_days, status="draft")
         rule.status = "draft"
     db.flush()
     return rule

@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -8,7 +8,7 @@ from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
 from app.models.user import SysDataScope, SysPermission, SysRole
-from app.services.auth import create_user
+from app.services.auth import create_shift_rule, create_user, publish_shift_rule, update_shift_rule
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -657,6 +657,41 @@ class TestShiftRuleValidation:
         assert edited.status_code == 200
         assert edited.json()["data"]["status"] == "draft"
         assert api_client.post(f"/api/v1/shift-rules/{rule_id}/publish", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+    def test_updating_published_rule_start_date_creates_draft_snapshot(self, db_session) -> None:
+        room = OrgUnit(code="snapshot-room", name="快照机房", type="room")
+        person = Person(
+            code="snapshot-operator", name="快照值班员", org_unit=room,
+            participate_schedule=True, person_type="duty_operator",
+        )
+        shift = ShiftDef(
+            org_unit=room, code="snapshot-shift", name="快照班",
+            start_time="08:00", end_time="16:00",
+        )
+        db_session.add_all([room, person, shift])
+        db_session.commit()
+        original_start = (date.today() + timedelta(days=40)).isoformat()
+        updated_start = (date.today() + timedelta(days=50)).isoformat()
+        rule = create_shift_rule(
+            db_session, "snapshot-rule", "快照规则", cycle_days=1,
+            start_date=original_start, persons_per_cell=1, org_unit_id=room.id,
+            days=[{"day_no": 1, "cells": [{"shift_def_id": shift.id, "person_ids": [person.id]}]}],
+        )
+        publish_shift_rule(db_session, rule.id)
+        db_session.commit()
+
+        update_shift_rule(db_session, rule.id, start_date=updated_start)
+
+        versions = list(db_session.scalars(
+            select(ShiftRuleVersion)
+            .where(ShiftRuleVersion.rule_id == rule.id)
+            .order_by(ShiftRuleVersion.version_no)
+        ))
+        assert rule.status == "draft"
+        assert [(version.status, version.start_date) for version in versions] == [
+            ("published", original_start),
+            ("draft", updated_start),
+        ]
 
 
 class TestScheduleGeneration:
