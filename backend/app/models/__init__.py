@@ -1,4 +1,5 @@
 from app.models.base import BaseModel
+from app.models.approval import ApprovalRecord, ApprovalTask
 from app.models.export import ExportTask
 from app.models.holiday import HolidayCalendar, RefundStandard
 from app.models.organization import OrgUnit
@@ -9,6 +10,8 @@ from app.models.user import SysDataScope, SysPermission, SysRole, SysUser
 
 __all__ = [
     "BaseModel",
+    "ApprovalRecord",
+    "ApprovalTask",
     "ExportTask",
     "HolidayCalendar",
     "ActualDuty",

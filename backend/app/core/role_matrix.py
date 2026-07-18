@@ -14,9 +14,9 @@ class CanonicalRole:
 VIEW = "schedule:monthly:view"
 ROLE_MATRIX = (
     CanonicalRole("duty_operator", "值机员", "self", (
-        VIEW, "duty:schedule:view_self", "duty:swap:view_self", "duty:leave:view_self", "duty:cover:view_self",
+        VIEW, "duty:schedule:view_self", "duty:swap:view_self", "duty:leave:view_self", "duty:cover:view_self", "approval:record:view_done",
     )),
-    CanonicalRole("maintenance", "检修班", "self", ("duty:cover:view_self",)),
+    CanonicalRole("maintenance", "检修班", "self", ("duty:cover:view_self", "approval:record:view_done",)),
     CanonicalRole("deputy_director", "副主任", "room", (
         VIEW, "duty:swap:view_self", "duty:leave:view_self", "duty:cover:view_self",
         "approval:task:view_todo", "approval:record:view_done", "schedule:monthly:generate", "shift:rule:view", "shift:rule:manage",

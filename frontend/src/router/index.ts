@@ -23,6 +23,7 @@ const CUSTOM_VIEWS: Record<string, unknown> = {
   'schedule-table': () => import('@/views/schedule/ScheduleTableView.vue'),
   'actual-duty': () => import('@/views/schedule/ActualDutyView.vue'),
   'export-history': () => import('@/views/schedule/ExportHistoryView.vue'),
+  'approval-center': () => import('@/views/approval/ApprovalCenterView.vue'),
 }
 
 function buildRoutes(items: MenuItem[]): RouteRecordRaw[] {
