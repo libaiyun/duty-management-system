@@ -109,7 +109,7 @@ def test_alembic_upgrade_head_creates_current_schema_and_role_matrix(
         }
 
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "grant_swap_perms_admin"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "schedule_recalc_flag_m5"
 
             roles = {
                 code: role_id

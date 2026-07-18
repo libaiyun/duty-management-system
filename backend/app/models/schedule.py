@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, text
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON
@@ -104,6 +104,12 @@ class ScheduleShift(BaseModel):
         cascade="all, delete-orphan",
         order_by="ScheduleShiftPerson.position_no",
     )
+    baseline_persons = relationship(
+        "ScheduleShiftBaselinePerson",
+        back_populates="schedule_shift",
+        cascade="all, delete-orphan",
+        order_by="ScheduleShiftBaselinePerson.position_no",
+    )
 
     __table_args__ = (
         Index("ix_schedule_shift_day", "schedule_day_id"),
@@ -131,42 +137,24 @@ class ScheduleShiftPerson(BaseModel):
     )
 
 
-class ActualDuty(BaseModel):
-    """Published duty result; later swap/leave/cover workflows amend these rows."""
+class ScheduleShiftBaselinePerson(BaseModel):
+    """The immutable personnel baseline captured when a shift is generated."""
 
-    __tablename__ = "actual_duty"
+    __tablename__ = "schedule_shift_baseline_person"
 
-    org_unit_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("org_unit.id", ondelete="RESTRICT"), nullable=False,
-    )
     schedule_shift_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("schedule_shift.id", ondelete="RESTRICT"), nullable=False,
+        BigInteger, ForeignKey("schedule_shift.id", ondelete="CASCADE"), nullable=False,
     )
-    original_person_id: Mapped[int] = mapped_column(
+    person_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("person.id", ondelete="RESTRICT"), nullable=False,
     )
-    actual_person_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("person.id", ondelete="RESTRICT"), nullable=False,
-    )
-    duty_date: Mapped[date] = mapped_column(Date, nullable=False)
-    shift_def_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("shift_def.id", ondelete="RESTRICT"), nullable=False,
-    )
-    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="schedule")
-    source_record_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    schedule_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    position_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
-    org_unit = relationship("OrgUnit", foreign_keys=[org_unit_id])
-    schedule_shift = relationship("ScheduleShift", foreign_keys=[schedule_shift_id])
-    original_person = relationship("Person", foreign_keys=[original_person_id])
-    actual_person = relationship("Person", foreign_keys=[actual_person_id])
-    shift_def = relationship("ShiftDef", foreign_keys=[shift_def_id])
+    schedule_shift = relationship("ScheduleShift", back_populates="baseline_persons", foreign_keys=[schedule_shift_id])
+    person = relationship("Person", foreign_keys=[person_id])
 
     __table_args__ = (
-        Index("ix_actual_duty_org_date", "org_unit_id", "duty_date"),
-        Index("ix_actual_duty_person_date", "actual_person_id", "duty_date"),
-        Index("ix_actual_duty_shift_date", "shift_def_id", "duty_date"),
-        Index("uq_actual_duty_shift_original", "schedule_shift_id", "original_person_id", unique=True),
+        Index("uq_schedule_shift_baseline_position", "schedule_shift_id", "position_no", unique=True),
     )
 
 
@@ -213,4 +201,49 @@ class ScheduleChangeLog(BaseModel):
 
     __table_args__ = (
         Index("ix_schedule_change_log_schedule_shift", "schedule_id", "schedule_shift_id"),
+    )
+
+
+class DutyChangeLedger(BaseModel):
+    """An immutable, per-person change record for final schedule adjustments."""
+
+    __tablename__ = "duty_change_ledger"
+
+    schedule_shift_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("schedule_shift.id", ondelete="CASCADE"), nullable=False)
+    original_person_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("person.id", ondelete="RESTRICT"), nullable=False)
+    before_person_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("person.id", ondelete="RESTRICT"), nullable=False)
+    after_person_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("person.id", ondelete="RESTRICT"), nullable=False)
+    change_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_biz_no: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+
+    schedule_shift = relationship("ScheduleShift", foreign_keys=[schedule_shift_id])
+    original_person = relationship("Person", foreign_keys=[original_person_id])
+    before_person = relationship("Person", foreign_keys=[before_person_id])
+    after_person = relationship("Person", foreign_keys=[after_person_id])
+
+    __table_args__ = (
+        Index("ix_duty_change_ledger_shift", "schedule_shift_id"),
+        Index("ix_duty_change_ledger_type", "change_type"),
+        Index("ix_duty_change_ledger_original_person", "original_person_id"),
+        Index("ix_duty_change_ledger_before_person", "before_person_id"),
+        Index("ix_duty_change_ledger_after_person", "after_person_id"),
+    )
+
+
+class ScheduleRecalculationFlag(BaseModel):
+    """Marks a historical month whose derived settlement data must be recalculated."""
+
+    __tablename__ = "schedule_recalculation_flag"
+
+    org_unit_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("org_unit.id", ondelete="RESTRICT"), nullable=False)
+    year_month: Mapped[str] = mapped_column(String(7), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="required")
+    reason: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    org_unit = relationship("OrgUnit", foreign_keys=[org_unit_id])
+
+    __table_args__ = (
+        UniqueConstraint("org_unit_id", "year_month", name="uq_schedule_recalculation_flag_month"),
+        Index("ix_schedule_recalculation_flag_status", "status"),
     )

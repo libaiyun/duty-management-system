@@ -3,10 +3,19 @@ from datetime import date, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.exceptions import BusinessRuleError, StateConflictError
+from app.core.exceptions import BusinessRuleError
 from app.models.holiday import HolidayCalendar
 from app.models.person import Person
-from app.models.schedule import ActualDuty, MonthlySchedule, ScheduleChangeLog, ScheduleDay, ScheduleShift, ScheduleShiftPerson
+from app.models.schedule import (
+    DutyChangeLedger,
+    MonthlySchedule,
+    ScheduleChangeLog,
+    ScheduleDay,
+    ScheduleRecalculationFlag,
+    ScheduleShift,
+    ScheduleShiftBaselinePerson,
+    ScheduleShiftPerson,
+)
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
 
 SCHEDULE_MATERIALIZATION_DAYS = 365
@@ -176,10 +185,9 @@ def get_legal_holidays(db: Session, dates: list[date]) -> dict[date, str]:
 
 def update_schedule_shift_persons(
     db: Session, schedule: MonthlySchedule, shift: ScheduleShift, person_ids: list[int], remark: str | None,
+    *, change_type: str = "manual", source_biz_no: str | None = None, actor_id: int | None = None,
 ) -> ScheduleShift:
-    """Replace one shift's staff with eligible room staff and mark the schedule draft."""
-    if schedule.status == "locked":
-        raise StateConflictError(message="已锁定排班禁止修改")
+    """Replace one shift's final staff and append a traceable personnel ledger."""
     if not person_ids or len(person_ids) != len(set(person_ids)):
         raise BusinessRuleError(message="值班人员不能为空且不能重复")
     expected_count = db.scalar(
@@ -193,6 +201,8 @@ def update_schedule_shift_persons(
         .where(ScheduleShiftPerson.schedule_shift_id == shift.id)
         .order_by(ScheduleShiftPerson.position_no)
     ).all())
+    if before_person_ids == person_ids:
+        return shift
     persons = list(db.scalars(select(Person).where(Person.id.in_(person_ids))).all())
     if len(persons) != len(person_ids) or any(
         p.org_unit_id != schedule.org_unit_id or p.status != "enabled"
@@ -200,6 +210,11 @@ def update_schedule_shift_persons(
         for p in persons
     ):
         raise BusinessRuleError(message="值班人员必须是当前机房启用且参与排班的值机员")
+    baseline_ids = list(db.scalars(
+        select(ScheduleShiftBaselinePerson.person_id)
+        .where(ScheduleShiftBaselinePerson.schedule_shift_id == shift.id)
+        .order_by(ScheduleShiftBaselinePerson.position_no)
+    ).all()) or before_person_ids
     next_version = schedule.version + 1
     db.add(ScheduleChangeLog(
         schedule_id=schedule.id, schedule_shift_id=shift.id, source_type="manual",
@@ -210,64 +225,55 @@ def update_schedule_shift_persons(
     for position_no, person_id in enumerate(person_ids, start=1):
         db.add(ScheduleShiftPerson(
             schedule_shift_id=shift.id, person_id=person_id, position_no=position_no,
-            source_type="manual", remark=remark,
+            source_type=change_type, remark=remark,
         ))
-    schedule.status = "draft"
+    for position_no, (before_person_id, after_person_id) in enumerate(zip(before_person_ids, person_ids), start=1):
+        if before_person_id != after_person_id:
+            db.add(DutyChangeLedger(
+                schedule_shift_id=shift.id,
+                original_person_id=baseline_ids[position_no - 1] if position_no <= len(baseline_ids) else before_person_id,
+                before_person_id=before_person_id,
+                after_person_id=after_person_id,
+                change_type=change_type,
+                source_biz_no=source_biz_no,
+                reason=remark,
+                created_by=actor_id,
+            ))
     schedule.version = next_version
     db.flush()
     return shift
 
 
-def refresh_actual_duties(db: Session, schedule: MonthlySchedule) -> int:
-    """Refresh initial actual-duty rows from the current published schedule."""
-    shifts = list(db.scalars(
-        select(ScheduleShift)
-        .join(ScheduleDay, ScheduleShift.schedule_day_id == ScheduleDay.id)
-        .where(ScheduleDay.schedule_id == schedule.id)
-        .options(selectinload(ScheduleShift.persons))
+def apply_historical_correction(
+    db: Session, schedule: MonthlySchedule, shift: ScheduleShift, person_ids: list[int], reason: str, actor_id: int,
+) -> ScheduleShift:
+    if shift.schedule_day.duty_date >= date.today():
+        raise BusinessRuleError(message="仅今天以前的班次可以执行历史修正")
+    current_person_ids = list(db.scalars(
+        select(ScheduleShiftPerson.person_id)
+        .where(ScheduleShiftPerson.schedule_shift_id == shift.id)
+        .order_by(ScheduleShiftPerson.position_no)
     ).all())
-    shift_ids = [shift.id for shift in shifts]
-    if shift_ids:
-        db.query(ActualDuty).filter(ActualDuty.schedule_shift_id.in_(shift_ids)).delete(synchronize_session=False)
-    count = 0
-    for shift in shifts:
-        duty_date = shift.start_at.date()
-        for assignment in shift.persons:
-            db.add(ActualDuty(
-                org_unit_id=schedule.org_unit_id,
-                schedule_shift_id=shift.id,
-                original_person_id=assignment.person_id,
-                actual_person_id=assignment.person_id,
-                duty_date=duty_date,
-                shift_def_id=shift.shift_def_id,
-                source_type="schedule",
-                schedule_version=schedule.version,
-            ))
-            count += 1
+    if current_person_ids == person_ids:
+        raise BusinessRuleError(message="修正后人员与当前最终排班一致")
+    updated_shift = update_schedule_shift_persons(
+        db, schedule, shift, person_ids, reason, change_type="historical_correction", actor_id=actor_id,
+    )
+    year_month = shift.schedule_day.duty_date.strftime("%Y-%m")
+    flag = db.scalar(select(ScheduleRecalculationFlag).where(
+        ScheduleRecalculationFlag.org_unit_id == schedule.org_unit_id,
+        ScheduleRecalculationFlag.year_month == year_month,
+    ))
+    if flag is None:
+        db.add(ScheduleRecalculationFlag(
+            org_unit_id=schedule.org_unit_id, year_month=year_month,
+            status="required", reason="历史最终排班已修正，需重新计算",
+        ))
+    else:
+        flag.status = "required"
+        flag.reason = "历史最终排班已修正，需重新计算"
     db.flush()
-    return count
-
-
-def list_actual_duties(
-    db: Session, *, org_unit_id: int, from_date: date | None, to_date: date | None,
-    person_id: int | None, shift_def_id: int | None, source_type: str | None, offset: int, limit: int,
-) -> tuple[list[ActualDuty], int]:
-    stmt = select(ActualDuty).where(ActualDuty.org_unit_id == org_unit_id)
-    if from_date:
-        stmt = stmt.where(ActualDuty.duty_date >= from_date)
-    if to_date:
-        stmt = stmt.where(ActualDuty.duty_date <= to_date)
-    if person_id:
-        stmt = stmt.where(ActualDuty.actual_person_id == person_id)
-    if shift_def_id:
-        stmt = stmt.where(ActualDuty.shift_def_id == shift_def_id)
-    if source_type:
-        stmt = stmt.where(ActualDuty.source_type == source_type)
-    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    rows = list(db.scalars(stmt.options(
-        selectinload(ActualDuty.shift_def), selectinload(ActualDuty.original_person), selectinload(ActualDuty.actual_person),
-    ).order_by(ActualDuty.duty_date, ActualDuty.id).offset(offset).limit(limit)).all())
-    return rows, total
+    return updated_shift
 
 
 def generate_schedule_from_rule(
@@ -433,6 +439,7 @@ def generate_schedule_from_rule(
                     position_no=pos,
                     source_type="auto",
                 ))
+                ss.baseline_persons.append(ScheduleShiftBaselinePerson(person_id=pid, position_no=pos))
             sday.shifts.append(ss)
 
         db.add(sday)

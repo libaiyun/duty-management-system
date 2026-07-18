@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError
 
 from app.models.organization import OrgUnit
 from app.models.person import Person
-from app.models.schedule import ActualDuty, MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
+from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleVersion
 
 pytestmark = pytest.mark.usefixtures("create_tables")
@@ -85,33 +85,6 @@ class TestMonthlySchedule:
         assert ms.created_at is not None
         assert ms.updated_at is not None
 
-
-class TestActualDuty:
-    """M3-P2-T1: 实际值班记录必须可关联原排班并按人员检索。"""
-
-    def test_create_actual_duty_from_schedule_shift(self, db_session) -> None:
-        org = _create_org(db_session)
-        person = _create_person(db_session, org)
-        shift_def = ShiftDef(org_unit_id=org.id, code="actual-early", name="早班", start_time="08:00", end_time="16:00")
-        rule = _create_rule(db_session)
-        version = _create_rule_version(db_session, rule)
-        schedule = _build_ms(db_session, org, rule, version, status="published")
-        day = ScheduleDay(schedule_id=schedule.id, duty_date=date(2026, 8, 1), weekday=5)
-        db_session.add_all([shift_def, day])
-        db_session.flush()
-        shift = ScheduleShift(schedule_day_id=day.id, shift_def_id=shift_def.id,
-                              start_at=datetime(2026, 8, 1, 8, tzinfo=timezone.utc), end_at=datetime(2026, 8, 1, 16, tzinfo=timezone.utc))
-        db_session.add(shift)
-        db_session.flush()
-        actual = ActualDuty(org_unit_id=org.id, schedule_shift_id=shift.id, original_person_id=person.id,
-                            actual_person_id=person.id, duty_date=day.duty_date, shift_def_id=shift_def.id,
-                            source_type="schedule", schedule_version=schedule.version)
-        db_session.add(actual)
-        db_session.commit()
-
-        assert actual.actual_person_id == person.id
-        assert actual.source_type == "schedule"
-        assert actual.schedule_shift.id == shift.id
 
     def test_org_unit_fk(self, db_session) -> None:
         org = _create_org(db_session)

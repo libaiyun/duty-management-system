@@ -82,6 +82,15 @@ describe('ScheduleTableView', () => {
     expect(wrapper.text()).toContain('李四')
   })
 
+  it('does not display a change marker without an effective change ledger entry', async () => {
+    const changedShift = days[0].shifts[0] as typeof days[number]['shifts'][number] & { change_types?: string[] }
+    changedShift.change_types = ['manual']
+    const wrapper = await mountView()
+
+    expect(wrapper.find('.schedule-table-view__change-tag').exists()).toBe(false)
+    delete changedShift.change_types
+  })
+
   it('marks personal and legal-holiday duty dates', async () => {
     const wrapper = await mountView()
     expect(wrapper.find('.schedule-table-view__day--mine').exists()).toBe(true)

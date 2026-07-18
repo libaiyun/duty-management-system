@@ -1,13 +1,23 @@
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
+from app.core.exceptions import BusinessRuleError
 from app.models.holiday import HolidayCalendar
 from app.models.organization import OrgUnit
 from app.models.person import Person
-from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
+from app.models.schedule import (
+    DutyChangeLedger,
+    MonthlySchedule,
+    ScheduleDay,
+    ScheduleRecalculationFlag,
+    ScheduleShift,
+    ScheduleShiftBaselinePerson,
+    ScheduleShiftPerson,
+)
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleVersion
 from app.models.user import SysDataScope, SysPermission, SysRole
 from app.services.auth import create_user
+from app.services.schedule import apply_historical_correction
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -165,6 +175,20 @@ def _build_full_schedule(db_session, org: OrgUnit, rule: ShiftRule, shift_defs: 
 
     db_session.commit()
     return ms
+
+
+def _shift_id_for_date(db_session, schedule_id: int, *, historical: bool = False) -> int:
+    comparison_date = date.today() - timedelta(days=1) if historical else date.today()
+    statement = (
+        select(ScheduleShift.id)
+        .join(ScheduleDay)
+        .where(ScheduleDay.schedule_id == schedule_id)
+        .where(ScheduleDay.duty_date <= comparison_date if historical else ScheduleDay.duty_date >= comparison_date)
+        .order_by(ScheduleDay.duty_date.desc() if historical else ScheduleDay.duty_date)
+    )
+    shift_id = db_session.scalar(statement)
+    assert shift_id is not None
+    return shift_id
 
 
 class TestScheduleListApi:
@@ -837,16 +861,16 @@ class TestScheduleGenerateApi:
         assert data["generated_at"] is not None
         assert data["day_count"] > 0
 
-    def test_edit_then_publish_refreshes_actual_duty(self, api_client: TestClient, db_session) -> None:
+    def test_edit_keeps_original_baseline_and_writes_ledger(self, api_client: TestClient, db_session) -> None:
         ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
         _, token = _create_admin(api_client, db_session)
         assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
-        day = api_client.get(
-            f"/api/v1/schedules/{ms.id}/days?year=2026&month=6", headers={"Authorization": f"Bearer {token}"},
-        ).json()["data"][0]
-        shift_id = day["shifts"][0]["id"]
+        shift_id = _shift_id_for_date(db_session, ms.id)
+        before_ids = db_session.scalars(
+            select(ScheduleShiftPerson.person_id).where(ScheduleShiftPerson.schedule_shift_id == shift_id).order_by(ScheduleShiftPerson.position_no)
+        ).all()
         edited = api_client.put(
-            f"/api/v1/schedules/{ms.id}/shifts/{shift_id}/persons", json={"person_ids": [persons[1].id, persons[0].id]},
+            f"/api/v1/schedules/{ms.id}/shifts/{shift_id}/persons", json={"person_ids": list(reversed(before_ids))},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert edited.status_code == 200
@@ -856,36 +880,127 @@ class TestScheduleGenerateApi:
         assert change is not None
         assert change.source_type == "manual"
         assert change.schedule_version == 2
-        assert change.before_person_ids == [persons[0].id, persons[1].id]
-        assert change.after_person_ids == [persons[1].id, persons[0].id]
+        assert change.before_person_ids == before_ids
+        assert change.after_person_ids == list(reversed(before_ids))
         assert api_client.post(f"/api/v1/schedules/{ms.id}/publish", headers={"Authorization": f"Bearer {token}"}).status_code == 200
-        actual = api_client.get(
-            "/api/v1/schedules/actual-duties?from=2026-06-01&to=2026-06-01", headers={"Authorization": f"Bearer {token}"},
+        baseline_ids = db_session.scalars(
+            select(ScheduleShiftBaselinePerson.person_id).where(ScheduleShiftBaselinePerson.schedule_shift_id == shift_id).order_by(ScheduleShiftBaselinePerson.position_no)
+        ).all()
+        assert baseline_ids == before_ids
+        ledger = api_client.get(
+            f"/api/v1/schedules/change-ledger?from={date.today()}&to={date.today()}",
+            headers={"Authorization": f"Bearer {token}"},
         )
-        assert actual.status_code == 200
-        assert actual.json()["data"]["items"][0]["actual_person_id"] == persons[1].id
+        assert ledger.status_code == 200
+        assert ledger.json()["data"]["total"] == 2
+        assert {item["change_type"] for item in ledger.json()["data"]["items"]} == {"manual"}
+        assert {item["created_by_name"] for item in ledger.json()["data"]["items"]} == {"管理员"}
+        assert db_session.scalar(select(DutyChangeLedger).where(DutyChangeLedger.schedule_shift_id == shift_id)) is not None
 
-    def test_edit_rejects_locked_schedule_with_conflict(self, api_client: TestClient, db_session) -> None:
+    def test_edit_with_unchanged_persons_does_not_create_a_change_marker(self, api_client: TestClient, db_session) -> None:
+        ms, _rule, _version, _org, _early, _persons = self._setup_published_rule_with_schedule(db_session)
+        _, token = _create_admin(api_client, db_session)
+        assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        shift_id = _shift_id_for_date(db_session, ms.id)
+        current_ids = db_session.scalars(
+            select(ScheduleShiftPerson.person_id)
+            .where(ScheduleShiftPerson.schedule_shift_id == shift_id)
+            .order_by(ScheduleShiftPerson.position_no)
+        ).all()
+
+        response = api_client.put(
+            f"/api/v1/schedules/{ms.id}/shifts/{shift_id}/persons", json={"person_ids": current_ids},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
+        assert {person["source_type"] for person in response.json()["data"]["persons"]} == {"auto"}
+        assert db_session.get(MonthlySchedule, ms.id).version == 1
+        assert db_session.scalar(select(DutyChangeLedger).where(DutyChangeLedger.schedule_shift_id == shift_id)) is None
+
+    def test_edit_does_not_use_schedule_lock_as_a_date_operation_guard(self, api_client: TestClient, db_session) -> None:
         ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
         _, token = _create_admin(api_client, db_session)
         assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
         db_session.get(MonthlySchedule, ms.id).status = "locked"
         db_session.commit()
-        day = api_client.get(f"/api/v1/schedules/{ms.id}/days?year=2026&month=6", headers={"Authorization": f"Bearer {token}"}).json()["data"][0]
+        shift_id = _shift_id_for_date(db_session, ms.id)
         response = api_client.put(
-            f"/api/v1/schedules/{ms.id}/shifts/{day['shifts'][0]['id']}/persons", json={"person_ids": [persons[0].id, persons[1].id]},
+            f"/api/v1/schedules/{ms.id}/shifts/{shift_id}/persons", json={"person_ids": [persons[0].id, persons[1].id]},
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert response.status_code == 409
-        assert response.json()["code"] == "STATE_CONFLICT"
+        assert response.status_code == 200
+
+    def test_normal_edit_rejects_historical_shift(self, api_client: TestClient, db_session) -> None:
+        ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
+        _, token = _create_admin(api_client, db_session)
+        assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        shift_id = _shift_id_for_date(db_session, ms.id, historical=True)
+        response = api_client.put(
+            f"/api/v1/schedules/{ms.id}/shifts/{shift_id}/persons", json={"person_ids": [persons[1].id, persons[0].id]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 422
+        assert "历史班次" in response.json()["message"]
+
+    def test_historical_correction_requires_director_role(self, api_client: TestClient, db_session) -> None:
+        ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
+        _, token = _create_admin(api_client, db_session)
+        assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        shift_id = _shift_id_for_date(db_session, ms.id, historical=True)
+        response = api_client.post(
+            f"/api/v1/schedules/{ms.id}/shifts/{shift_id}/history-corrections",
+            json={"person_ids": [persons[1].id, persons[0].id], "reason": "补录历史调整"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 403
+
+    def test_historical_correction_marks_month_for_recalculation(self, api_client: TestClient, db_session) -> None:
+        ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
+        _, token = _create_admin(api_client, db_session)
+        assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        shift_id = _shift_id_for_date(db_session, ms.id, historical=True)
+        schedule = db_session.get(MonthlySchedule, ms.id)
+        shift = db_session.get(ScheduleShift, shift_id)
+        assert schedule is not None and shift is not None
+        apply_historical_correction(db_session, schedule, shift, [persons[1].id, persons[0].id], "补录历史调整", actor_id=1)
+        db_session.commit()
+        flag = db_session.scalar(select(ScheduleRecalculationFlag).where(
+            ScheduleRecalculationFlag.org_unit_id == schedule.org_unit_id,
+            ScheduleRecalculationFlag.year_month == shift.schedule_day.duty_date.strftime("%Y-%m"),
+        ))
+        assert flag is not None
+        assert flag.status == "required"
+
+    def test_historical_correction_rejects_unchanged_final_schedule(self, api_client: TestClient, db_session) -> None:
+        ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
+        _, token = _create_admin(api_client, db_session)
+        assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        shift_id = _shift_id_for_date(db_session, ms.id, historical=True)
+        schedule = db_session.get(MonthlySchedule, ms.id)
+        shift = db_session.get(ScheduleShift, shift_id)
+        assert schedule is not None and shift is not None
+        current_ids = db_session.scalars(
+            select(ScheduleShiftPerson.person_id)
+            .where(ScheduleShiftPerson.schedule_shift_id == shift_id)
+            .order_by(ScheduleShiftPerson.position_no)
+        ).all()
+
+        with pytest.raises(BusinessRuleError, match="与当前最终排班一致"):
+            apply_historical_correction(db_session, schedule, shift, current_ids, "无需调整", actor_id=1)
+
+        assert db_session.scalar(select(ScheduleRecalculationFlag).where(
+            ScheduleRecalculationFlag.org_unit_id == schedule.org_unit_id,
+            ScheduleRecalculationFlag.year_month == shift.schedule_day.duty_date.strftime("%Y-%m"),
+        )) is None
 
     def test_edit_rejects_changed_staff_count(self, api_client: TestClient, db_session) -> None:
         ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
         _, token = _create_admin(api_client, db_session)
         assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
-        day = api_client.get(f"/api/v1/schedules/{ms.id}/days?year=2026&month=6", headers={"Authorization": f"Bearer {token}"}).json()["data"][0]
+        shift_id = _shift_id_for_date(db_session, ms.id)
         response = api_client.put(
-            f"/api/v1/schedules/{ms.id}/shifts/{day['shifts'][0]['id']}/persons", json={"person_ids": [persons[0].id]},
+            f"/api/v1/schedules/{ms.id}/shifts/{shift_id}/persons", json={"person_ids": [persons[0].id]},
             headers={"Authorization": f"Bearer {token}"},
         )
         assert response.status_code == 422

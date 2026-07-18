@@ -41,7 +41,7 @@
           <article
             class="schedule-table-view__day"
             :class="dayClasses(data.day, data.type)"
-            @click="openActionMenu(data.day)"
+            @click="openDayDetail(data.day)"
           >
             <div class="schedule-table-view__date">
               <span>{{ dayNumber(data.day) }}</span>
@@ -55,15 +55,7 @@
               >
                 <strong>{{ shift.shift_def_name }}</strong>
                 <span :title="personText(shift)">{{ personText(shift) }}</span>
-                <el-button v-if="canManage && !isLocked" link type="primary" size="small" @click.stop="openEditor(shift)">编辑</el-button>
-              </div>
-              <div v-if="actionDate === data.day && isMyDay(data.day)" class="schedule-table-view__action-menu" @click.stop>
-                <el-button v-for="shift in myShifts(data.day)" :key="shift.id" link type="primary" @click="openSwap(shift)">
-                  换班（{{ shift.shift_def_name }}）
-                </el-button>
-                <el-button link :disabled="Boolean(dayFor(data.day)?.is_legal_holiday) || isLocked" @click="showPlaceholder('请假')">
-                  发起请假
-                </el-button>
+                <el-tag v-if="changeLabel(shift)" size="small" type="warning" class="schedule-table-view__change-tag" @click.stop="openChangeLedger(data.day)">{{ changeLabel(shift) }}</el-tag>
               </div>
             </template>
           </article>
@@ -110,7 +102,7 @@
           </template>
         </el-table-column>
           <el-table-column v-for="shift in shiftColumns" :key="shift.id" :label="shift.name" min-width="160">
-          <template #default="{ row }"><span>{{ personText(shiftFor(row, shift.id)) }}</span><el-button v-if="canManage && !isLocked" link type="primary" @click="openEditor(shiftFor(row, shift.id))">编辑</el-button></template>
+          <template #default="{ row }"><span>{{ personText(shiftFor(row, shift.id)) }}</span><el-tag v-if="changeLabel(shiftFor(row, shift.id))" size="small" type="warning" class="schedule-table-view__change-tag" @click="openChangeLedger(row.duty_date)">{{ changeLabel(shiftFor(row, shift.id)) }}</el-tag></template>
         </el-table-column>
           </el-table>
         </div>
@@ -121,8 +113,24 @@
     <el-select v-model="editorPersonIds" multiple filterable placeholder="选择值班人员" style="width: 100%">
       <el-option v-for="person in eligiblePersons" :key="person.id" :label="person.name" :value="person.id" />
     </el-select>
+    <el-input v-if="historicalCorrection" v-model="historicalReason" class="schedule-table-view__correction-reason" type="textarea" placeholder="请填写修正原因" />
     <template #footer><el-button @click="editorVisible = false">取消</el-button><el-button type="primary" @click="saveEditor">保存</el-button></template>
   </el-dialog>
+  <el-drawer v-model="detailVisible" :title="`${detailDate} 当日班次详情`" size="420px">
+    <template v-for="shift in detailDay?.shifts || []" :key="shift.id">
+      <el-card class="schedule-table-view__detail-card" shadow="never">
+        <template #header><strong>{{ shift.shift_def_name }}</strong></template>
+        <p>最终值班人员：{{ personText(shift) }}</p>
+        <p v-if="shift.effective_change_summary">{{ shift.effective_change_summary }}</p>
+        <p v-if="shift.pending_change_summary">{{ shift.pending_change_summary }}</p>
+        <div class="schedule-table-view__detail-actions">
+          <el-button v-if="isMyShift(shift) && !isHistory(detailDate)" link type="primary" @click="openSwap(shift)">发起换班</el-button>
+          <el-button v-if="canEditShift(shift) && !isHistory(detailDate)" link type="primary" @click="openEditor(shift)">编辑最终排班</el-button>
+          <el-button v-if="canCorrectHistory && isHistory(detailDate)" link type="primary" @click="openHistoricalCorrection(shift)">历史修正</el-button>
+        </div>
+      </el-card>
+    </template>
+  </el-drawer>
 </template>
 
 <script setup lang="ts">
@@ -151,6 +159,9 @@ interface ScheduleShift {
   id: number
   shift_def_id: number
   shift_def_name: string
+  change_types?: string[]
+  effective_change_summary?: string | null
+  pending_change_summary?: string | null
   persons: SchedulePerson[]
 }
 interface PersonOption { id: number; name: string }
@@ -173,14 +184,20 @@ const days = ref<ScheduleDay[]>([])
 const calendarDate = ref(new Date())
 const viewMode = ref<'calendar' | 'list'>('calendar')
 const actionDate = ref('')
+const detailVisible = ref(false)
+const detailDate = ref('')
 const listDateRange = ref<string[]>([])
 const personKeyword = ref('')
 const loadError = ref('')
 const editorVisible = ref(false)
+const historicalCorrection = ref(false)
+const historicalReason = ref('')
 const editingShift = ref<ScheduleShift | undefined>()
 const editorPersonIds = ref<number[]>([])
 const eligiblePersons = ref<PersonOption[]>([])
 const canManage = computed(() => permissionStore.hasPermission('schedule:monthly:generate'))
+const isSystemAdmin = computed(() => authStore.roleCodes.includes('system_admin'))
+const canCorrectHistory = computed(() => authStore.roleCodes.some((role) => role === 'room_director' || role === 'deputy_director'))
 
 const monthKey = computed(() => {
   const year = calendarDate.value.getFullYear()
@@ -190,6 +207,7 @@ const monthKey = computed(() => {
 const displayMonth = computed(() => `${monthKey.value.slice(0, 4)}年${Number(monthKey.value.slice(5))}月`)
 const isLocked = computed(() => schedule.value?.status === 'locked')
 const daysByDate = computed(() => new Map(days.value.map((day) => [day.duty_date, day])))
+const detailDay = computed(() => dayFor(detailDate.value))
 const shiftColumns = computed(() => {
   const columns = new Map<number, { id: number; name: string }>()
   for (const day of days.value) {
@@ -264,6 +282,8 @@ function isMyDay(day: string): boolean {
   if (!authStore.personId) return false
   return dayFor(day)?.shifts.some((shift) => shift.persons.some((person) => person.person_id === authStore.personId)) || false
 }
+function isMyShift(shift: ScheduleShift): boolean { return Boolean(authStore.personId && shift.persons.some((person) => person.person_id === authStore.personId)) }
+function canEditShift(shift: ScheduleShift): boolean { return canManage.value && (!isSystemAdmin.value || isMyShift(shift)) }
 
 function myShifts(day: string): ScheduleShift[] {
   if (!authStore.personId) return []
@@ -288,12 +308,23 @@ function weekdayLabel(weekday: number): string {
   return ['一', '二', '三', '四', '五', '六', '日'][weekday] || ''
 }
 
-function openActionMenu(day: string): void {
-  if (isMyDay(day) && !isLocked.value) actionDate.value = actionDate.value === day ? '' : day
+function openDayDetail(day: string): void { if (dayFor(day)) { detailDate.value = day; detailVisible.value = true } }
+function isHistory(day: string): boolean {
+  const now = new Date()
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  return day < today
 }
+function changeLabel(shift?: ScheduleShift): string {
+  if (!shift?.effective_change_summary) return ''
+  const type = shift?.change_types?.[0]
+  return ({ swap: '换', swap_cancel: '换', manual: '修', historical_correction: '修', leave_cover: '请', cover: '顶' }[type || ''] || '')
+}
+async function openChangeLedger(day: string): Promise<void> { await router.push({ path: '/actual-duty', query: { from: day, to: day } }) }
 
 async function openEditor(shift?: ScheduleShift): Promise<void> {
   if (!shift || !schedule.value) return
+  historicalCorrection.value = false
+  historicalReason.value = ''
   editingShift.value = shift; editorPersonIds.value = shift.persons.map((person) => person.person_id)
   if (!eligiblePersons.value.length) {
     const response = await httpClient.get<PersonOption[]>(`/schedules/${schedule.value.id}/eligible-persons`)
@@ -304,9 +335,26 @@ async function openEditor(shift?: ScheduleShift): Promise<void> {
 async function saveEditor(): Promise<void> {
   if (!schedule.value || !editingShift.value) return
   try {
-    await httpClient.put(`/schedules/${schedule.value.id}/shifts/${editingShift.value.id}/persons`, { person_ids: editorPersonIds.value })
-    editorVisible.value = false; ElMessage.success('排班调整已保存，请发布后生效'); await loadSchedule()
+    if (historicalCorrection.value) {
+      if (!historicalReason.value.trim()) { ElMessage.warning('请填写修正原因'); return }
+      await httpClient.post(`/schedules/${schedule.value.id}/shifts/${editingShift.value.id}/history-corrections`, { person_ids: editorPersonIds.value, reason: historicalReason.value })
+    } else {
+      await httpClient.put(`/schedules/${schedule.value.id}/shifts/${editingShift.value.id}/persons`, { person_ids: editorPersonIds.value })
+    }
+    editorVisible.value = false; ElMessage.success(historicalCorrection.value ? '历史修正已生效，相关数据需重新计算' : '最终排班已更新'); await loadSchedule()
   } catch (error) { ElMessage.error(resolveErrorMessage(error, '保存排班调整失败')) }
+}
+async function openHistoricalCorrection(shift: ScheduleShift): Promise<void> {
+  if (!schedule.value) return
+  historicalCorrection.value = true
+  historicalReason.value = ''
+  editingShift.value = shift
+  editorPersonIds.value = shift.persons.map((person) => person.person_id)
+  if (!eligiblePersons.value.length) {
+    const response = await httpClient.get<PersonOption[]>(`/schedules/${schedule.value.id}/eligible-persons`)
+    eligiblePersons.value = response.data
+  }
+  editorVisible.value = true
 }
 async function publishSchedule(): Promise<void> {
   if (!schedule.value) return
@@ -424,6 +472,11 @@ function statusTagType(status: string): 'info' | 'success' | 'warning' {
 .schedule-table-view__date-value { font-variant-numeric: tabular-nums; }
 .schedule-table-view__empty-value { color: var(--el-text-color-placeholder); }
 .schedule-table-view__list { min-width: 720px; }
+.schedule-table-view__detail-card { margin-bottom: 12px; }
+.schedule-table-view__detail-card p { margin: 0 0 8px; }
+.schedule-table-view__detail-actions { display: flex; gap: 10px; }
+.schedule-table-view__correction-reason { margin-top: 12px; }
+.schedule-table-view__change-tag { cursor: pointer; }
 
 @media (max-width: 900px) {
   .schedule-table-view__calendar { overflow-x: auto; min-width: 780px; }

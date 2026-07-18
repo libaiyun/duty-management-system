@@ -4,7 +4,7 @@ from app.models.export import ExportTask
 from app.models.holiday import HolidayCalendar, RefundStandard
 from app.models.organization import OrgUnit
 from app.models.person import Person
-from app.models.schedule import ActualDuty, MonthlySchedule, ScheduleChangeLog, ScheduleDay, ScheduleShift, ScheduleShiftPerson, ShiftSwap
+from app.models.schedule import DutyChangeLedger, MonthlySchedule, ScheduleChangeLog, ScheduleDay, ScheduleRecalculationFlag, ScheduleShift, ScheduleShiftBaselinePerson, ScheduleShiftPerson, ShiftSwap
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
 from app.models.user import SysDataScope, SysPermission, SysRole, SysUser
 
@@ -14,15 +14,17 @@ __all__ = [
     "ApprovalTask",
     "ExportTask",
     "HolidayCalendar",
-    "ActualDuty",
+    "DutyChangeLedger",
     "ShiftSwap",
     "RefundStandard",
     "MonthlySchedule",
     "OrgUnit",
     "Person",
     "ScheduleDay",
+    "ScheduleRecalculationFlag",
     "ScheduleChangeLog",
     "ScheduleShift",
+    "ScheduleShiftBaselinePerson",
     "ScheduleShiftPerson",
     "ShiftDef",
     "ShiftRule",

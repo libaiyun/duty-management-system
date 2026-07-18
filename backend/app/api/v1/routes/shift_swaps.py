@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -53,6 +55,7 @@ def eligible_persons(request: Request, db: Session = Depends(get_db), user: SysU
             Person.org_unit_id == room_id,
             Person.status == "enabled",
             Person.person_type == "duty_operator",
+            Person.participate_schedule.is_(True),
             Person.id != user.person_id,
         )
         .order_by(Person.name)
@@ -73,7 +76,12 @@ def eligible_shifts(person_id: int, request: Request, db: Session = Depends(get_
         .join(ScheduleDay).join(MonthlySchedule, ScheduleDay.schedule_id == MonthlySchedule.id)
         .join(ShiftDef, ShiftDef.id == ScheduleShift.shift_def_id)
         .join(ScheduleShiftPerson)
-        .where(ScheduleShiftPerson.person_id == person_id, MonthlySchedule.org_unit_id == room_id, MonthlySchedule.status == "published")
+        .where(
+            ScheduleShiftPerson.person_id == person_id,
+            MonthlySchedule.org_unit_id == room_id,
+            MonthlySchedule.status == "published",
+            ScheduleDay.duty_date >= date.today(),
+        )
         .order_by(ScheduleDay.duty_date)
     ).all()
     # The service remains the authority for published/locked/duplicate validation.

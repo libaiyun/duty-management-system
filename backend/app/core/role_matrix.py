@@ -35,7 +35,7 @@ ROLE_MATRIX = (
         VIEW, "schedule:monthly:generate", "shift:rule:view", "shift:rule:manage", "duty:actual:view", "export:task:view",
     )),
     CanonicalRole("finance_statistics", "财务/统计", "room", (
-        VIEW, "refund:batch:calculate", "refund:detail:view", "attendance:monthly:view", "export:task:view",
+        VIEW, "duty:actual:view", "refund:batch:calculate", "refund:detail:view", "attendance:monthly:view", "export:task:view",
     )),
     CanonicalRole("system_admin", "系统管理员", "all", ()),
 )

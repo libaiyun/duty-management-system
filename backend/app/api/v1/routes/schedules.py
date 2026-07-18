@@ -1,12 +1,12 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, Query, Request
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import RequirePermission, get_db, get_page_params, resolve_current_room_id
-from app.core.exceptions import BusinessRuleError, NotFoundError, StateConflictError
-from app.models.schedule import ActualDuty, MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
+from app.core.exceptions import BusinessRuleError, ForbiddenError, NotFoundError, StateConflictError
+from app.models.schedule import DutyChangeLedger, MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson, ShiftSwap
 from app.models.person import Person
 from app.models.shift import ShiftRule, ShiftRuleVersion
 from app.models.user import SysUser
@@ -15,7 +15,8 @@ from app.schemas.response import ApiResponse, ok
 from app.services.auth import check_user_permission
 from app.schemas.schedule import (
     ScheduleDayResponse,
-    ActualDutyResponse,
+    DutyChangeLedgerResponse,
+    HistoricalCorrectionRequest,
     ScheduleResponse,
     SchedulePersonOptionResponse,
     ScheduleShiftUpdateRequest,
@@ -28,9 +29,8 @@ from app.services.schedule import (
     get_schedule_counts,
     get_schedule_days,
     get_schedule_days_by_range,
-    list_actual_duties,
+    apply_historical_correction,
     list_schedules,
-    refresh_actual_duties,
     update_schedule_shift_persons,
 )
 
@@ -91,7 +91,9 @@ def _build_shift_person_response(sp: ScheduleShiftPerson) -> ScheduleShiftPerson
     )
 
 
-def _build_shift_response(shift: ScheduleShift) -> ScheduleShiftResponse:
+def _build_shift_response(
+    shift: ScheduleShift, pending_change_summary: str | None = None, effective_change_summary: str | None = None,
+) -> ScheduleShiftResponse:
     sd = shift.shift_def
     return ScheduleShiftResponse(
         id=shift.id,
@@ -101,30 +103,76 @@ def _build_shift_response(shift: ScheduleShift) -> ScheduleShiftResponse:
         start_at=shift.start_at,
         end_at=shift.end_at,
         status=shift.status,
+        change_types=sorted({sp.source_type for sp in (shift.persons or []) if sp.source_type != "auto"}),
+        effective_change_summary=effective_change_summary,
+        pending_change_summary=pending_change_summary,
         persons=[_build_shift_person_response(sp) for sp in (shift.persons or [])],
     )
 
 
-def _build_day_response(day: ScheduleDay, holidays: dict[date, str]) -> ScheduleDayResponse:
+def _build_day_response(
+    day: ScheduleDay, holidays: dict[date, str], pending_summaries: dict[int, str] | None = None,
+    effective_summaries: dict[int, str] | None = None,
+) -> ScheduleDayResponse:
     return ScheduleDayResponse(
         id=day.id,
         duty_date=day.duty_date,
         weekday=day.weekday,
         is_legal_holiday=day.duty_date in holidays,
         holiday_name=holidays.get(day.duty_date),
-        shifts=[_build_shift_response(sh) for sh in (day.shifts or [])],
+        shifts=[_build_shift_response(sh, (pending_summaries or {}).get(sh.id), (effective_summaries or {}).get(sh.id)) for sh in (day.shifts or [])],
     )
 
 
-def _build_actual_duty_response(row: ActualDuty) -> ActualDutyResponse:
-    return ActualDutyResponse(
-        id=row.id, duty_date=row.duty_date, shift_def_id=row.shift_def_id,
-        shift_def_name=row.shift_def.name if row.shift_def else "",
-        original_person_id=row.original_person_id,
-        original_person_name=row.original_person.name if row.original_person else "",
-        actual_person_id=row.actual_person_id,
-        actual_person_name=row.actual_person.name if row.actual_person else "",
-        source_type=row.source_type, schedule_version=row.schedule_version,
+def _get_pending_swap_summaries(db: Session, days: list[ScheduleDay]) -> dict[int, str]:
+    shift_ids = [shift.id for day in days for shift in day.shifts]
+    if not shift_ids:
+        return {}
+    swaps = list(db.scalars(
+        select(ShiftSwap)
+        .where(ShiftSwap.status.in_(("wait_target_confirm", "wait_director_approval")))
+        .where((ShiftSwap.source_shift_id.in_(shift_ids)) | (ShiftSwap.target_shift_id.in_(shift_ids)))
+        .options(selectinload(ShiftSwap.applicant), selectinload(ShiftSwap.target_person))
+    ).all())
+    summaries: dict[int, str] = {}
+    for swap in swaps:
+        status = "待对方确认" if swap.status == "wait_target_confirm" else "待主任审批"
+        summaries[swap.source_shift_id] = f"拟变更：{swap.applicant.name} → {swap.target_person.name}，{status}"
+        if swap.target_shift_id:
+            summaries[swap.target_shift_id] = f"拟变更：{swap.target_person.name} → {swap.applicant.name}，{status}"
+    return summaries
+
+
+def _get_effective_change_summaries(db: Session, days: list[ScheduleDay]) -> dict[int, str]:
+    shift_ids = [shift.id for day in days for shift in day.shifts]
+    if not shift_ids:
+        return {}
+    rows = list(db.scalars(
+        select(DutyChangeLedger)
+        .where(DutyChangeLedger.schedule_shift_id.in_(shift_ids))
+        .options(selectinload(DutyChangeLedger.before_person), selectinload(DutyChangeLedger.after_person))
+        .order_by(DutyChangeLedger.schedule_shift_id, DutyChangeLedger.created_at.desc())
+    ).all())
+    labels = {"swap": "换班", "swap_cancel": "换班作废", "leave_cover": "请假顶班", "historical_correction": "历史修正", "manual": "人工调整"}
+    summaries: dict[int, str] = {}
+    for row in rows:
+        summaries.setdefault(
+            row.schedule_shift_id,
+            f"已生效{labels.get(row.change_type, row.change_type)}：{row.before_person.name} → {row.after_person.name}",
+        )
+    return summaries
+
+
+def _build_ledger_response(row: DutyChangeLedger, creator_names: dict[int, str]) -> DutyChangeLedgerResponse:
+    shift = row.schedule_shift
+    return DutyChangeLedgerResponse(
+        id=row.id, duty_date=shift.schedule_day.duty_date, shift_def_id=shift.shift_def_id,
+        shift_def_name=shift.shift_def.name if shift.shift_def else "",
+        start_at=shift.start_at, end_at=shift.end_at,
+        original_person_name=row.original_person.name, before_person_name=row.before_person.name,
+        after_person_name=row.after_person.name, change_type=row.change_type,
+        source_biz_no=row.source_biz_no, reason=row.reason, created_at=row.created_at, created_by=row.created_by,
+        created_by_name=creator_names.get(row.created_by) if row.created_by else None,
     )
 
 
@@ -168,20 +216,34 @@ def list_schedules_endpoint(
     return ok(PageResponse.create(items=items, total=total, params=paging))
 
 
-@router.get("/actual-duties", response_model=ApiResponse[PageResponse[ActualDutyResponse]])
-def list_actual_duties_endpoint(
+@router.get("/change-ledger", response_model=ApiResponse[PageResponse[DutyChangeLedgerResponse]])
+def list_change_ledger_endpoint(
     request: Request, paging: PageParams = Depends(get_page_params),
     from_date: date | None = Query(None, alias="from"), to_date: date | None = Query(None, alias="to"),
-    person_id: int | None = None, shift_def_id: int | None = None, source_type: str | None = None,
+    person_id: int | None = None, shift_def_id: int | None = None, change_type: str | None = None,
     db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("duty:actual:view")),
-) -> ApiResponse[PageResponse[ActualDutyResponse]]:
+) -> ApiResponse[PageResponse[DutyChangeLedgerResponse]]:
     if from_date and to_date and from_date > to_date:
         raise BusinessRuleError(message="起始日期不能晚于结束日期")
-    rows, total = list_actual_duties(
-        db, org_unit_id=resolve_current_room_id(request, db, user), from_date=from_date, to_date=to_date,
-        person_id=person_id, shift_def_id=shift_def_id, source_type=source_type, offset=paging.offset, limit=paging.page_size,
-    )
-    return ok(PageResponse.create(items=[_build_actual_duty_response(row) for row in rows], total=total, params=paging))
+    room_id = resolve_current_room_id(request, db, user)
+    stmt = select(DutyChangeLedger).join(ScheduleShift).join(ScheduleDay).join(MonthlySchedule).where(MonthlySchedule.org_unit_id == room_id)
+    if from_date: stmt = stmt.where(ScheduleDay.duty_date >= from_date)
+    if to_date: stmt = stmt.where(ScheduleDay.duty_date <= to_date)
+    if person_id: stmt = stmt.where((DutyChangeLedger.original_person_id == person_id) | (DutyChangeLedger.before_person_id == person_id) | (DutyChangeLedger.after_person_id == person_id))
+    if shift_def_id: stmt = stmt.where(ScheduleShift.shift_def_id == shift_def_id)
+    if change_type: stmt = stmt.where(DutyChangeLedger.change_type == change_type)
+    total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
+    rows = list(db.scalars(stmt.options(
+        selectinload(DutyChangeLedger.original_person), selectinload(DutyChangeLedger.before_person), selectinload(DutyChangeLedger.after_person),
+        selectinload(DutyChangeLedger.schedule_shift).selectinload(ScheduleShift.shift_def),
+        selectinload(DutyChangeLedger.schedule_shift).selectinload(ScheduleShift.schedule_day),
+    ).order_by(ScheduleDay.duty_date.desc(), DutyChangeLedger.created_at.desc()).offset(paging.offset).limit(paging.page_size)).all())
+    creator_ids = {row.created_by for row in rows if row.created_by}
+    creator_names = {
+        user.id: user.display_name
+        for user in db.scalars(select(SysUser).where(SysUser.id.in_(creator_ids))).all()
+    } if creator_ids else {}
+    return ok(PageResponse.create(items=[_build_ledger_response(row, creator_names) for row in rows], total=total, params=paging))
 
 
 @router.get("/{id}", response_model=ApiResponse[ScheduleResponse])
@@ -215,7 +277,9 @@ def get_schedule_days_endpoint(
         raise BusinessRuleError(message="month 必须在 1 到 12 之间")
     days = get_schedule_days(db, id, year=year, month=month)
     holidays = get_legal_holidays(db, [day.duty_date for day in days])
-    return ok([_build_day_response(day, holidays) for day in days])
+    pending_summaries = _get_pending_swap_summaries(db, days)
+    effective_summaries = _get_effective_change_summaries(db, days)
+    return ok([_build_day_response(day, holidays, pending_summaries, effective_summaries) for day in days])
 
 
 @router.get("/{id}/days/range", response_model=ApiResponse[list[ScheduleDayResponse]])
@@ -235,7 +299,9 @@ def get_schedule_days_range_endpoint(
         raise BusinessRuleError(message="日期范围不能超过 366 天")
     days = get_schedule_days_by_range(db, id, from_date=from_date, to_date=to_date)
     holidays = get_legal_holidays(db, [day.duty_date for day in days])
-    return ok([_build_day_response(day, holidays) for day in days])
+    pending_summaries = _get_pending_swap_summaries(db, days)
+    effective_summaries = _get_effective_change_summaries(db, days)
+    return ok([_build_day_response(day, holidays, pending_summaries, effective_summaries) for day in days])
 
 
 @router.post("/{id}/generate", response_model=ApiResponse[ScheduleResponse])
@@ -278,7 +344,31 @@ def update_schedule_shift_endpoint(
     ))
     if shift is None:
         raise NotFoundError(message="排班班次不存在")
-    update_schedule_shift_persons(db, schedule, shift, payload.person_ids, payload.remark)
+    if "system_admin" in {role.code for role in user.roles} and (
+        user.person_id is None or user.person_id not in {person.person_id for person in shift.persons}
+    ):
+        raise ForbiddenError(message="系统管理员仅可编辑本人班次")
+    duty_date = db.scalar(select(ScheduleDay.duty_date).where(ScheduleDay.id == shift.schedule_day_id))
+    if duty_date is not None and duty_date < date.today():
+        raise BusinessRuleError(message="历史班次仅可通过历史修正调整")
+    update_schedule_shift_persons(db, schedule, shift, payload.person_ids, payload.remark, actor_id=user.id)
+    db.commit()
+    db.refresh(shift)
+    return ok(_build_shift_response(shift))
+
+
+@router.post("/{id}/shifts/{shift_id}/history-corrections", response_model=ApiResponse[ScheduleShiftResponse])
+def historical_correction_endpoint(
+    id: int, shift_id: int, payload: HistoricalCorrectionRequest, request: Request,
+    db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("schedule:monthly:generate")),
+) -> ApiResponse[ScheduleShiftResponse]:
+    if not {role.code for role in user.roles} & {"room_director", "deputy_director"}:
+        raise ForbiddenError(message="仅机房主任或副主任可执行历史修正")
+    schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
+    shift = db.scalar(select(ScheduleShift).join(ScheduleDay).where(ScheduleShift.id == shift_id, ScheduleDay.schedule_id == schedule.id).options(selectinload(ScheduleShift.schedule_day)))
+    if shift is None:
+        raise NotFoundError(message="排班班次不存在")
+    apply_historical_correction(db, schedule, shift, payload.person_ids, payload.reason, user.id)
     db.commit()
     db.refresh(shift)
     return ok(_build_shift_response(shift))
@@ -310,7 +400,6 @@ def publish_schedule_endpoint(
     schedule.status = "published"
     from datetime import datetime, UTC
     schedule.published_at = datetime.now(UTC)
-    refresh_actual_duties(db, schedule)
     db.commit()
     db.refresh(schedule)
     return ok(_build_schedule_response(schedule, get_schedule_counts(db, [schedule.id]).get(schedule.id)))

@@ -44,6 +44,9 @@ class ScheduleShiftResponse(BaseModel):
     start_at: datetime
     end_at: datetime
     status: str
+    change_types: list[str] = []
+    effective_change_summary: str | None = None
+    pending_change_summary: str | None = None
     persons: list[ScheduleShiftPersonResponse] = []
 
     model_config = {"from_attributes": True}
@@ -65,22 +68,30 @@ class ScheduleShiftUpdateRequest(BaseModel):
     remark: str | None = Field(default=None, max_length=255)
 
 
+class HistoricalCorrectionRequest(BaseModel):
+    person_ids: list[int] = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=500)
+
+
 class SchedulePersonOptionResponse(BaseModel):
     id: int
     code: str
     name: str
 
 
-class ActualDutyResponse(BaseModel):
+class DutyChangeLedgerResponse(BaseModel):
     id: int
     duty_date: date
     shift_def_id: int
     shift_def_name: str = ""
-    original_person_id: int
+    start_at: datetime
+    end_at: datetime
     original_person_name: str = ""
-    actual_person_id: int
-    actual_person_name: str = ""
-    source_type: str
-    schedule_version: int
-
-    model_config = {"from_attributes": True}
+    before_person_name: str = ""
+    after_person_name: str = ""
+    change_type: str
+    source_biz_no: str | None = None
+    reason: str | None = None
+    created_at: datetime
+    created_by: int | None = None
+    created_by_name: str | None = None

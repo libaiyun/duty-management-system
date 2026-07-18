@@ -68,7 +68,7 @@ export const menuItems: MenuItem[] = [
   {
     name: 'actual-duty',
     path: '/actual-duty',
-    title: '实际值班',
+    title: '值班变更台账',
     icon: Clock,
     permission: PC.DUTY_ACTUAL_VIEW,
   },

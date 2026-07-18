@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 import pytest
 from fastapi.testclient import TestClient
 
-from app.core.role_matrix import CANONICAL_ROLE_CODES
+from app.core.role_matrix import CANONICAL_ROLE_CODES, ROLE_MATRIX, canonical_permissions
 from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
@@ -33,6 +33,33 @@ def test_seed_role_matrix_is_idempotent_and_replaces_legacy_grants(db_session) -
     assert sorted(scope.scope_type for scope in db_session.query(SysDataScope).all()) == [
         "all", "room", "room", "room", "room", "self", "self",
     ]
+
+
+def test_finance_statistics_can_review_duty_change_ledger() -> None:
+    finance_role = next(role for role in ROLE_MATRIX if role.code == "finance_statistics")
+
+    assert "duty:actual:view" in canonical_permissions(finance_role)
+
+
+def test_finance_statistics_can_access_duty_change_ledger(api_client: TestClient, db_session) -> None:
+    seed_role_matrix(db_session)
+    room = OrgUnit(code="finance-room", name="财务机房", type="room")
+    db_session.add(room)
+    db_session.flush()
+    person = Person(code="FINANCE", name="财务统计", person_type="other", org_unit_id=room.id)
+    db_session.add(person)
+    db_session.flush()
+    user = create_user(db_session, "finance", "password123", "财务统计", person_id=person.id)
+    user.roles.append(db_session.query(SysRole).filter_by(code="finance_statistics").one())
+    db_session.commit()
+
+    response = api_client.get(
+        "/api/v1/schedules/change-ledger",
+        headers={"Authorization": f"Bearer {_token(api_client, 'finance')}"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["data"]["items"] == []
 
 
 def test_role_mutations_and_user_scope_assignment_are_unavailable(api_client: TestClient, db_session) -> None:

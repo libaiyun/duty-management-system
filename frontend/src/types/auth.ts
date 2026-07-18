@@ -15,6 +15,7 @@ export interface UserMeResponse {
   display_name: string
   status: string
   permissions: string[]
+  role_codes: string[]
   person_id: number | null
   room_id: number | null
   room_name: string | null

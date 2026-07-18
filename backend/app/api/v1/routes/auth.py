@@ -80,6 +80,7 @@ def me(
         display_name=user.display_name,
         status=user.status,
         permissions=list(perm_codes),
+        role_codes=[role.code for role in user.roles],
         person_id=user.person_id,
         room_id=room.id if room is not None and not can_switch_room else None,
         room_name=room.name if room is not None and not can_switch_room else None,

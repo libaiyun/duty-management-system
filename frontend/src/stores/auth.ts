@@ -21,6 +21,7 @@ export const useAuthStore = defineStore('auth', {
     roomId: null as number | null,
     roomName: '',
     canSwitchRoom: false,
+    roleCodes: [] as string[],
   }),
 
   getters: {
@@ -48,6 +49,7 @@ export const useAuthStore = defineStore('auth', {
       this.roomId = user.room_id
       this.roomName = user.room_name || ''
       this.canSwitchRoom = user.can_switch_room
+      this.roleCodes = user.role_codes
       localStorage.setItem(USER_KEY, user.display_name)
 
       const appStore = useAppStore()
@@ -84,6 +86,7 @@ export const useAuthStore = defineStore('auth', {
         this.roomId = user.room_id
         this.roomName = user.room_name || ''
         this.canSwitchRoom = user.can_switch_room
+        this.roleCodes = user.role_codes
         localStorage.setItem(USER_KEY, user.display_name)
         appStore.userName = user.display_name
 
@@ -130,6 +133,7 @@ export const useAuthStore = defineStore('auth', {
       this.roomId = null
       this.roomName = ''
       this.canSwitchRoom = false
+      this.roleCodes = []
       localStorage.removeItem(TOKEN_KEY)
       localStorage.removeItem(REFRESH_TOKEN_KEY)
       localStorage.removeItem(USER_KEY)
