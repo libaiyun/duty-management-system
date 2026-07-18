@@ -24,6 +24,7 @@ const CUSTOM_VIEWS: Record<string, unknown> = {
   'actual-duty': () => import('@/views/schedule/ActualDutyView.vue'),
   'export-history': () => import('@/views/schedule/ExportHistoryView.vue'),
   'approval-center': () => import('@/views/approval/ApprovalCenterView.vue'),
+  'swap-request': () => import('@/views/swap/ShiftSwapView.vue'),
 }
 
 function buildRoutes(items: MenuItem[]): RouteRecordRaw[] {

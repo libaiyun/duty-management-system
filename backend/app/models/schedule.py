@@ -170,6 +170,27 @@ class ActualDuty(BaseModel):
     )
 
 
+class ShiftSwap(BaseModel):
+    """A requested mutual swap or one-way cover for published duties."""
+
+    __tablename__ = "shift_swap"
+    biz_no: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    swap_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    applicant_person_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("person.id", ondelete="RESTRICT"), nullable=False)
+    source_shift_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("schedule_shift.id", ondelete="RESTRICT"), nullable=False)
+    target_person_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("person.id", ondelete="RESTRICT"), nullable=False)
+    target_shift_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("schedule_shift.id", ondelete="RESTRICT"), nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applicant = relationship("Person", foreign_keys=[applicant_person_id])
+    target_person = relationship("Person", foreign_keys=[target_person_id])
+    source_shift = relationship("ScheduleShift", foreign_keys=[source_shift_id])
+    target_shift = relationship("ScheduleShift", foreign_keys=[target_shift_id])
+    __table_args__ = (Index("ix_shift_swap_applicant_status", "applicant_person_id", "status"), Index("ix_shift_swap_target_status", "target_person_id", "status"))
+
+
 class ScheduleChangeLog(BaseModel):
     """Immutable record of one manual staffing adjustment."""
 

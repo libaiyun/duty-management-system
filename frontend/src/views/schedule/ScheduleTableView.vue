@@ -58,7 +58,9 @@
                 <el-button v-if="canManage && !isLocked" link type="primary" size="small" @click.stop="openEditor(shift)">编辑</el-button>
               </div>
               <div v-if="actionDate === data.day && isMyDay(data.day)" class="schedule-table-view__action-menu" @click.stop>
-                <el-button link type="primary" @click="showPlaceholder('换班')">发起换班</el-button>
+                <el-button v-for="shift in myShifts(data.day)" :key="shift.id" link type="primary" @click="openSwap(shift)">
+                  换班（{{ shift.shift_def_name }}）
+                </el-button>
                 <el-button link :disabled="Boolean(dayFor(data.day)?.is_legal_holiday) || isLocked" @click="showPlaceholder('请假')">
                   发起请假
                 </el-button>
@@ -263,6 +265,11 @@ function isMyDay(day: string): boolean {
   return dayFor(day)?.shifts.some((shift) => shift.persons.some((person) => person.person_id === authStore.personId)) || false
 }
 
+function myShifts(day: string): ScheduleShift[] {
+  if (!authStore.personId) return []
+  return dayFor(day)?.shifts.filter((shift) => shift.persons.some((person) => person.person_id === authStore.personId)) || []
+}
+
 function dayClasses(day: string, type: string): Record<string, boolean> {
   const dutyDay = dayFor(day)
   return {
@@ -310,6 +317,10 @@ async function publishSchedule(): Promise<void> {
   } catch (error) {
     ElMessage.error(resolveErrorMessage(error, '发布排班失败'))
   }
+}
+function openSwap(shift?: ScheduleShift): void {
+  if (!shift) return
+  void router.push({ path: '/swap-request', query: { source_shift_id: String(shift.id) } })
 }
 function showPlaceholder(action: string): void {
   ElMessage.info(`${action}功能将在后续任务中开放`)

@@ -13,6 +13,7 @@ from app.api.v1.routes import (
     schedules,
     shift_rules,
     shifts,
+    shift_swaps,
     users,
 )
 
@@ -31,3 +32,4 @@ api_router.include_router(shifts.router, tags=["shifts"])
 api_router.include_router(shift_rules.router, tags=["shift-rules"])
 api_router.include_router(holidays.router, tags=["holidays"])
 api_router.include_router(schedules.router, tags=["schedules"])
+api_router.include_router(shift_swaps.router, tags=["shift-swaps"])

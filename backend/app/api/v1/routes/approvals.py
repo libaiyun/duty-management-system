@@ -7,11 +7,13 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import RequirePermission, get_db, get_page_params, resolve_current_room_id
 from app.core.exceptions import ForbiddenError, NotFoundError
 from app.models.approval import ApprovalRecord, ApprovalTask
+from app.models.schedule import ShiftSwap
 from app.models.user import SysUser
 from app.schemas.approval import ApprovalActionRequest, ApprovalRecordResponse, ApprovalTaskResponse
 from app.schemas.pagination import PageParams, PageResponse
 from app.schemas.response import ApiResponse, ok
 from app.services.approval import complete_task
+from app.services.shift_swap import director_decide
 
 router = APIRouter(prefix="/approval-tasks", tags=["approval-tasks"])
 records_router = APIRouter(prefix="/approval-records", tags=["approval-records"])
@@ -99,6 +101,11 @@ def _act(task_id: int, payload: ApprovalActionRequest, action: str, request: Req
         db, task_id, user.id, action=action, opinion=payload.opinion, snapshot=latest_snapshot,
         allow_room_approval=task.node_code == "director_approval",
     )
+    if task.biz_type == "shift_swap" and task.node_code == "director_approval" and db.get(ShiftSwap, task.biz_id) is not None:
+        role_codes = {role.code for role in user.roles}
+        if not role_codes & {"room_director", "deputy_director"}:
+            raise ForbiddenError(message="仅机房主任或副主任可审批换班")
+        director_decide(db, task.biz_id, user, approve=action == "approve", opinion=payload.opinion)
     db.commit()
     db.refresh(record.task)
     return ok(_response(record.task, record.opinion))

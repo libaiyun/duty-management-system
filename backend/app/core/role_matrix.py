@@ -14,18 +14,18 @@ class CanonicalRole:
 VIEW = "schedule:monthly:view"
 ROLE_MATRIX = (
     CanonicalRole("duty_operator", "值机员", "self", (
-        VIEW, "duty:schedule:view_self", "duty:swap:view_self", "duty:leave:view_self", "duty:cover:view_self", "approval:record:view_done",
+        VIEW, "duty:schedule:view_self", "duty:swap:view_self", "swap:apply:create", "swap:apply:confirm", "duty:leave:view_self", "duty:cover:view_self", "approval:record:view_done",
     )),
     CanonicalRole("maintenance", "检修班", "self", ("duty:cover:view_self", "approval:record:view_done",)),
     CanonicalRole("deputy_director", "副主任", "room", (
-        VIEW, "duty:swap:view_self", "duty:leave:view_self", "duty:cover:view_self",
+        VIEW, "duty:swap:view_self", "swap:apply:create", "swap:apply:confirm", "duty:leave:view_self", "duty:cover:view_self",
         "approval:task:view_todo", "approval:record:view_done", "schedule:monthly:generate", "shift:rule:view", "shift:rule:manage",
         "shift:def:view", "shift:def:manage", "duty:actual:view", "leave:record:view",
         "refund:batch:calculate", "refund:detail:view", "attendance:monthly:view", "export:task:view",
         "person:manage:view", "holiday:standard:view", "holiday:standard:manage",
     )),
     CanonicalRole("room_director", "机房主任", "room", (
-        VIEW, "duty:swap:view_self", "duty:leave:view_self", "duty:cover:view_self",
+        VIEW, "duty:swap:view_self", "swap:apply:create", "swap:apply:confirm", "duty:leave:view_self", "duty:cover:view_self",
         "approval:task:view_todo", "approval:record:view_done", "schedule:monthly:generate", "shift:rule:view", "shift:rule:manage",
         "shift:def:view", "shift:def:manage", "duty:actual:view", "leave:record:view",
         "refund:batch:calculate", "refund:detail:view", "attendance:monthly:view", "export:task:view",
