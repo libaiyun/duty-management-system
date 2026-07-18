@@ -47,10 +47,11 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
 import { httpClient, resolveErrorMessage } from '@/services/http'
+import { useRoomContextStore } from '@/stores/room-context'
 
 interface ShiftDefItem {
   id: number
@@ -63,6 +64,7 @@ interface ShiftDefItem {
 }
 
 const shiftDefs = ref<ShiftDefItem[]>([])
+const roomContextStore = useRoomContextStore()
 const loading = ref(false)
 const saving = ref(false)
 const dialogVisible = ref(false)
@@ -76,6 +78,7 @@ const formRules: FormRules = {
 }
 
 onMounted(loadShiftDefs)
+watch(() => roomContextStore.currentRoomId, loadShiftDefs)
 
 async function loadShiftDefs() {
   loading.value = true

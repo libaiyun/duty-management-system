@@ -47,10 +47,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
 import { httpClient, resolveErrorMessage } from '@/services/http'
+import { useRoomContextStore } from '@/stores/room-context'
 
 interface ShiftDefItem { id: number; code: string; name: string; start_time: string; end_time: string; display_order: number; status: string }
 interface ShiftRuleItem { id: number; day_no: number; cell_persons: Record<string, number[]> }
@@ -60,6 +61,7 @@ interface PersonItem { id: number; code: string; name: string; person_type: stri
 const STATUS_LABELS: Record<string, string> = { draft: '草稿', published: '已发布', superseded: '已替换' }
 const STATUS_TAG: Record<string, string> = { draft: 'info', published: 'success', superseded: 'warning' }
 const shiftRules = ref<ShiftRuleData[]>([])
+const roomContextStore = useRoomContextStore()
 const shiftDefs = ref<ShiftDefItem[]>([])
 const persons = ref<PersonItem[]>([])
 const loading = ref(false)
@@ -79,6 +81,9 @@ const formRules: FormRules = {
 }
 
 onMounted(async () => { await Promise.all([loadRules(), loadShiftDefs(), loadPersons()]) })
+watch(() => roomContextStore.currentRoomId, async () => {
+  await Promise.all([loadRules(), loadShiftDefs(), loadPersons()])
+})
 
 async function loadRules() {
   loading.value = true

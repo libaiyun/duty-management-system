@@ -7,6 +7,8 @@ import { router as appRouter } from '@/router'
 
 import PersonView from '@/views/base-data/PersonView.vue'
 import { httpClient } from '@/services/http'
+import { useAuthStore } from '@/stores/auth'
+import { useRoomContextStore } from '@/stores/room-context'
 
 vi.mock('@/services/http', () => ({
   httpClient: {
@@ -112,6 +114,18 @@ describe('PersonView', () => {
 
     expect(httpClient.get).not.toHaveBeenCalledWith('/users')
     expect(wrapper.text()).toContain('zhangsan')
+  })
+
+  it('reloads persons when the administrator switches rooms', async () => {
+    const authStore = useAuthStore()
+    authStore.canSwitchRoom = true
+    const roomContextStore = useRoomContextStore()
+    roomContextStore.selectedRoomId = 1
+
+    roomContextStore.selectRoom(2)
+
+    await vi.waitFor(() => expect(httpClient.get).toHaveBeenCalledTimes(3))
+    expect(httpClient.get).toHaveBeenLastCalledWith('/persons')
   })
 })
 

@@ -136,11 +136,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
 import { httpClient, resolveErrorMessage } from '@/services/http'
+import { useRoomContextStore } from '@/stores/room-context'
 
 interface OrgUnitItem {
   id: number
@@ -178,6 +179,7 @@ function personTypeLabel(type: string): string {
 }
 
 const router = useRouter()
+const roomContextStore = useRoomContextStore()
 
 const loading = ref(false)
 const saving = ref(false)
@@ -237,6 +239,10 @@ const formRules: FormRules = {
 
 onMounted(async () => {
   await Promise.all([loadOrgUnits(), loadPersons()])
+})
+
+watch(() => roomContextStore.currentRoomId, () => {
+  void loadPersons()
 })
 
 async function loadOrgUnits() {

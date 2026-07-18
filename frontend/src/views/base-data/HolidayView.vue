@@ -159,11 +159,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
 import { httpClient, resolveErrorMessage } from '@/services/http'
 import { usePermissionStore } from '@/stores/permission'
+import { useRoomContextStore } from '@/stores/room-context'
 import { PERMISSION_CODES } from '@/types/permission'
 
 interface HolidayItem {
@@ -193,6 +194,7 @@ interface ImportResult {
 
 const activeTab = ref('holiday')
 const permissionStore = usePermissionStore()
+const roomContextStore = useRoomContextStore()
 const canManageGlobalHolidays = computed(() => permissionStore.hasPermission(PERMISSION_CODES.HOLIDAY_GLOBAL_MANAGE))
 const canManageStandard = computed(() => permissionStore.hasPermission(PERMISSION_CODES.HOLIDAY_STANDARD_MANAGE))
 
@@ -222,6 +224,7 @@ const yearOptions = computed(() => {
 onMounted(async () => {
   await Promise.all([loadHolidays(), loadStandard()])
 })
+watch(() => roomContextStore.currentRoomId, loadStandard)
 
 async function loadHolidays() {
   loading.value = true

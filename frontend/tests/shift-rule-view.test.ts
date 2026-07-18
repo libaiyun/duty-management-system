@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { router as appRouter } from '@/router'
 import { httpClient } from '@/services/http'
+import { useAuthStore } from '@/stores/auth'
+import { useRoomContextStore } from '@/stores/room-context'
 
 import ShiftRuleView from '@/views/base-data/ShiftRuleView.vue'
 import ShiftDefView from '@/views/base-data/ShiftDefView.vue'
@@ -54,6 +56,18 @@ describe('ShiftDefView', () => {
     expect(wrapper.text()).toContain('新增班次')
     expect(wrapper.find('.el-tabs').exists()).toBe(false)
     expect(httpClient.get).toHaveBeenCalledWith('/shifts')
+  })
+
+  it('reloads shift definitions when the administrator switches rooms', async () => {
+    const authStore = useAuthStore()
+    authStore.canSwitchRoom = true
+    const roomContextStore = useRoomContextStore()
+    roomContextStore.selectedRoomId = 1
+
+    roomContextStore.selectRoom(2)
+
+    await vi.waitFor(() => expect(httpClient.get).toHaveBeenCalledTimes(2))
+    expect(httpClient.get).toHaveBeenLastCalledWith('/shifts')
   })
 })
 
@@ -112,6 +126,20 @@ describe('ShiftRuleView', () => {
     await new Promise((resolve) => setTimeout(resolve, 300))
 
     expect(wrapper.findAllComponents(ElSelect)).toHaveLength(24)
+  })
+
+  it('reloads all room-scoped rule data when the administrator switches rooms', async () => {
+    const authStore = useAuthStore()
+    authStore.canSwitchRoom = true
+    const roomContextStore = useRoomContextStore()
+    roomContextStore.selectedRoomId = 1
+
+    roomContextStore.selectRoom(2)
+
+    await vi.waitFor(() => expect(httpClient.get).toHaveBeenCalledTimes(6))
+    expect(httpClient.get).toHaveBeenCalledWith('/shift-rules')
+    expect(httpClient.get).toHaveBeenCalledWith('/shifts')
+    expect(httpClient.get).toHaveBeenCalledWith('/persons')
   })
 })
 

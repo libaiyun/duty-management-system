@@ -6,8 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { router as appRouter } from '@/router'
 
 import HolidayView from '@/views/base-data/HolidayView.vue'
+import { httpClient } from '@/services/http'
 import { usePermissionStore } from '@/stores/permission'
 import { PERMISSION_CODES } from '@/types/permission'
+import { useAuthStore } from '@/stores/auth'
+import { useRoomContextStore } from '@/stores/room-context'
 
 vi.mock('@/services/http', () => ({
   httpClient: {
@@ -77,6 +80,18 @@ describe('HolidayView', () => {
     expect(headerTexts).toContain('是否法定')
     expect(headerTexts).toContain('状态')
     expect(headerTexts).toContain('操作')
+  })
+
+  it('reloads only the room-scoped standard when the administrator switches rooms', async () => {
+    const authStore = useAuthStore()
+    authStore.canSwitchRoom = true
+    const roomContextStore = useRoomContextStore()
+    roomContextStore.selectedRoomId = 1
+
+    roomContextStore.selectRoom(2)
+
+    await vi.waitFor(() => expect(httpClient.get).toHaveBeenCalledTimes(3))
+    expect(httpClient.get).toHaveBeenLastCalledWith('/holidays/standard')
   })
 })
 
