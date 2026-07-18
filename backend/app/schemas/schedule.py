@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ScheduleResponse(BaseModel):
@@ -56,5 +56,31 @@ class ScheduleDayResponse(BaseModel):
     is_legal_holiday: bool
     holiday_name: str | None = None
     shifts: list[ScheduleShiftResponse] = []
+
+    model_config = {"from_attributes": True}
+
+
+class ScheduleShiftUpdateRequest(BaseModel):
+    person_ids: list[int] = Field(min_length=1)
+    remark: str | None = Field(default=None, max_length=255)
+
+
+class SchedulePersonOptionResponse(BaseModel):
+    id: int
+    code: str
+    name: str
+
+
+class ActualDutyResponse(BaseModel):
+    id: int
+    duty_date: date
+    shift_def_id: int
+    shift_def_name: str = ""
+    original_person_id: int
+    original_person_name: str = ""
+    actual_person_id: int
+    actual_person_name: str = ""
+    source_type: str
+    schedule_version: int
 
     model_config = {"from_attributes": True}

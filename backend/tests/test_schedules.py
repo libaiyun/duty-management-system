@@ -30,6 +30,7 @@ def _create_admin(api_client: TestClient, db_session, select_room: bool = True) 
     permissions = [
         SysPermission(code="schedule:monthly:view", name="View Schedule", type="api"),
         SysPermission(code="schedule:monthly:generate", name="Generate Schedule", type="api"),
+        SysPermission(code="duty:actual:view", name="View Actual Duty", type="api"),
         SysPermission(code="shift:rule:view", name="View Shift Rule", type="api"),
         SysPermission(code="shift:rule:manage", name="Manage Shift Rule", type="api"),
     ]
@@ -229,8 +230,8 @@ class TestScheduleListApi:
         early = _create_shift_def(db_session)
         p1 = _create_person(db_session, org_a, "P001", "张三")
         p2 = _create_person(db_session, org_b, "P002", "李四")
-        _build_full_schedule(db_session, org_a, rule, [early], [p1])
-        _build_full_schedule(db_session, org_b, rule, [early], [p2])
+        _build_full_schedule(db_session, org_a, rule, [early], [p1], status="published")
+        _build_full_schedule(db_session, org_b, rule, [early], [p2], status="published")
 
         resp = api_client.get(f"/api/v1/schedules?org_unit_id={org_a.id}",
                               headers={"Authorization": f"Bearer {token}"})
@@ -247,7 +248,7 @@ class TestScheduleListApi:
         rule = _create_rule(db_session)
         early = _create_shift_def(db_session)
         p1 = _create_person(db_session, org_a, "P001", "张三")
-        _build_full_schedule(db_session, org_a, rule, [early], [p1])
+        _build_full_schedule(db_session, org_a, rule, [early], [p1], status="published")
         _build_full_schedule(db_session, org_b, rule, [early], [p1])
         _build_full_schedule(db_session, org_c, rule, [early], [p1])
 
@@ -273,8 +274,8 @@ class TestScheduleListApi:
         early = _create_shift_def(db_session)
         p1 = _create_person(db_session, org_a, "P001", "张三")
         p2 = _create_person(db_session, org_b, "P002", "李四")
-        _build_full_schedule(db_session, org_a, rule, [early], [p1])
-        _build_full_schedule(db_session, org_b, rule, [early], [p2])
+        _build_full_schedule(db_session, org_a, rule, [early], [p1], status="published")
+        _build_full_schedule(db_session, org_b, rule, [early], [p2], status="published")
 
         _, token = _create_scoped_user(api_client, db_session, "room-user", org_a.id)
 
@@ -310,7 +311,7 @@ class TestScheduleListApi:
         rule = _create_rule(db_session)
         early = _create_shift_def(db_session)
         p1 = _create_person(db_session, org_a, "P001", "张三")
-        _build_full_schedule(db_session, org_a, rule, [early], [p1])
+        _build_full_schedule(db_session, org_a, rule, [early], [p1], status="published")
 
         _, token = _create_scoped_user(api_client, db_session, "room-user", org_a.id)
 
@@ -835,6 +836,70 @@ class TestScheduleGenerateApi:
         assert data["status"] == "published"
         assert data["generated_at"] is not None
         assert data["day_count"] > 0
+
+    def test_edit_then_publish_refreshes_actual_duty(self, api_client: TestClient, db_session) -> None:
+        ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
+        _, token = _create_admin(api_client, db_session)
+        assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        day = api_client.get(
+            f"/api/v1/schedules/{ms.id}/days?year=2026&month=6", headers={"Authorization": f"Bearer {token}"},
+        ).json()["data"][0]
+        shift_id = day["shifts"][0]["id"]
+        edited = api_client.put(
+            f"/api/v1/schedules/{ms.id}/shifts/{shift_id}/persons", json={"person_ids": [persons[1].id, persons[0].id]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert edited.status_code == 200
+        assert edited.json()["data"]["persons"][0]["source_type"] == "manual"
+        from app.models.schedule import ScheduleChangeLog
+        change = db_session.scalar(select(ScheduleChangeLog).where(ScheduleChangeLog.schedule_shift_id == shift_id))
+        assert change is not None
+        assert change.source_type == "manual"
+        assert change.schedule_version == 2
+        assert change.before_person_ids == [persons[0].id, persons[1].id]
+        assert change.after_person_ids == [persons[1].id, persons[0].id]
+        assert api_client.post(f"/api/v1/schedules/{ms.id}/publish", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        actual = api_client.get(
+            "/api/v1/schedules/actual-duties?from=2026-06-01&to=2026-06-01", headers={"Authorization": f"Bearer {token}"},
+        )
+        assert actual.status_code == 200
+        assert actual.json()["data"]["items"][0]["actual_person_id"] == persons[1].id
+
+    def test_edit_rejects_locked_schedule_with_conflict(self, api_client: TestClient, db_session) -> None:
+        ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
+        _, token = _create_admin(api_client, db_session)
+        assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        db_session.get(MonthlySchedule, ms.id).status = "locked"
+        db_session.commit()
+        day = api_client.get(f"/api/v1/schedules/{ms.id}/days?year=2026&month=6", headers={"Authorization": f"Bearer {token}"}).json()["data"][0]
+        response = api_client.put(
+            f"/api/v1/schedules/{ms.id}/shifts/{day['shifts'][0]['id']}/persons", json={"person_ids": [persons[0].id, persons[1].id]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 409
+        assert response.json()["code"] == "STATE_CONFLICT"
+
+    def test_edit_rejects_changed_staff_count(self, api_client: TestClient, db_session) -> None:
+        ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
+        _, token = _create_admin(api_client, db_session)
+        assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        day = api_client.get(f"/api/v1/schedules/{ms.id}/days?year=2026&month=6", headers={"Authorization": f"Bearer {token}"}).json()["data"][0]
+        response = api_client.put(
+            f"/api/v1/schedules/{ms.id}/shifts/{day['shifts'][0]['id']}/persons", json={"person_ids": [persons[0].id]},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert response.status_code == 422
+        assert response.json()["message"] == "值班人员数量必须保持为 2 人"
+
+    def test_duty_operator_cannot_view_draft_schedule(self, api_client: TestClient, db_session) -> None:
+        ms, _rule, _version, org, _early, _persons = self._setup_published_rule_with_schedule(db_session)
+        user_id, token = _create_scoped_user(api_client, db_session, "draft-reader", org.id)
+        assert user_id
+        listed = api_client.get("/api/v1/schedules", headers={"Authorization": f"Bearer {token}"})
+        detail = api_client.get(f"/api/v1/schedules/{ms.id}", headers={"Authorization": f"Bearer {token}"})
+        assert listed.status_code == 200
+        assert listed.json()["data"]["items"] == []
+        assert detail.status_code == 404
 
     def test_generate_commits_regenerated_schedule(self, api_client: TestClient, db_session, monkeypatch) -> None:
         ms, _rule, _v, _org, _early, _persons = self._setup_published_rule_with_schedule(db_session)

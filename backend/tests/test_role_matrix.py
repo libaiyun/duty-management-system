@@ -62,7 +62,7 @@ def test_duty_operator_schedule_days_include_the_full_room_roster(api_client: Te
     version = ShiftRuleVersion(rule_id=rule.id, version_no=1, cycle_days=1, start_date="2026-08-01", persons_per_cell=2, snapshot={"days": []})
     db_session.add(version)
     db_session.flush()
-    schedule = MonthlySchedule(org_unit_id=room.id, rule_id=rule.id, rule_version_id=version.id, status="draft")
+    schedule = MonthlySchedule(org_unit_id=room.id, rule_id=rule.id, rule_version_id=version.id, status="published")
     db_session.add(schedule)
     db_session.flush()
     day = ScheduleDay(schedule_id=schedule.id, duty_date=date(2026, 8, 1), weekday=5)

@@ -1,7 +1,9 @@
 from datetime import date, datetime
 
 from sqlalchemy import BigInteger, Boolean, Date, DateTime, ForeignKey, Index, Integer, String, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.types import JSON
 
 from app.models.base import BaseModel
 
@@ -125,4 +127,68 @@ class ScheduleShiftPerson(BaseModel):
 
     __table_args__ = (
         Index("ix_schedule_shift_person_shift", "schedule_shift_id"),
+    )
+
+
+class ActualDuty(BaseModel):
+    """Published duty result; later swap/leave/cover workflows amend these rows."""
+
+    __tablename__ = "actual_duty"
+
+    org_unit_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("org_unit.id", ondelete="RESTRICT"), nullable=False,
+    )
+    schedule_shift_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("schedule_shift.id", ondelete="RESTRICT"), nullable=False,
+    )
+    original_person_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("person.id", ondelete="RESTRICT"), nullable=False,
+    )
+    actual_person_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("person.id", ondelete="RESTRICT"), nullable=False,
+    )
+    duty_date: Mapped[date] = mapped_column(Date, nullable=False)
+    shift_def_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("shift_def.id", ondelete="RESTRICT"), nullable=False,
+    )
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="schedule")
+    source_record_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    schedule_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    org_unit = relationship("OrgUnit", foreign_keys=[org_unit_id])
+    schedule_shift = relationship("ScheduleShift", foreign_keys=[schedule_shift_id])
+    original_person = relationship("Person", foreign_keys=[original_person_id])
+    actual_person = relationship("Person", foreign_keys=[actual_person_id])
+    shift_def = relationship("ShiftDef", foreign_keys=[shift_def_id])
+
+    __table_args__ = (
+        Index("ix_actual_duty_org_date", "org_unit_id", "duty_date"),
+        Index("ix_actual_duty_person_date", "actual_person_id", "duty_date"),
+        Index("ix_actual_duty_shift_date", "shift_def_id", "duty_date"),
+        Index("uq_actual_duty_shift_original", "schedule_shift_id", "original_person_id", unique=True),
+    )
+
+
+class ScheduleChangeLog(BaseModel):
+    """Immutable record of one manual staffing adjustment."""
+
+    __tablename__ = "schedule_change_log"
+
+    schedule_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("monthly_schedule.id", ondelete="CASCADE"), nullable=False,
+    )
+    schedule_shift_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("schedule_shift.id", ondelete="CASCADE"), nullable=False,
+    )
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    schedule_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    before_person_ids: Mapped[list[int]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
+    after_person_ids: Mapped[list[int]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
+    remark: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    schedule = relationship("MonthlySchedule", foreign_keys=[schedule_id])
+    schedule_shift = relationship("ScheduleShift", foreign_keys=[schedule_shift_id])
+
+    __table_args__ = (
+        Index("ix_schedule_change_log_schedule_shift", "schedule_id", "schedule_shift_id"),
     )

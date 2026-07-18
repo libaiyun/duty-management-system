@@ -11,6 +11,7 @@
         <el-tag v-if="schedule" :type="statusTagType(schedule.status)">
           {{ statusLabel(schedule.status) }}
         </el-tag>
+        <el-button v-if="canManage && schedule?.status === 'draft'" type="primary" @click="publishSchedule">发布排班</el-button>
         <el-button @click="openExportHistory">导出 Excel</el-button>
       </div>
     </div>
@@ -54,6 +55,7 @@
               >
                 <strong>{{ shift.shift_def_name }}</strong>
                 <span :title="personText(shift)">{{ personText(shift) }}</span>
+                <el-button v-if="canManage && !isLocked" link type="primary" size="small" @click.stop="openEditor(shift)">编辑</el-button>
               </div>
               <div v-if="actionDate === data.day && isMyDay(data.day)" class="schedule-table-view__action-menu" @click.stop>
                 <el-button link type="primary" @click="showPlaceholder('换班')">发起换班</el-button>
@@ -105,14 +107,20 @@
             <span v-else class="schedule-table-view__empty-value">-</span>
           </template>
         </el-table-column>
-        <el-table-column v-for="shift in shiftColumns" :key="shift.id" :label="shift.name" min-width="160">
-          <template #default="{ row }">{{ personText(shiftFor(row, shift.id)) }}</template>
+          <el-table-column v-for="shift in shiftColumns" :key="shift.id" :label="shift.name" min-width="160">
+          <template #default="{ row }"><span>{{ personText(shiftFor(row, shift.id)) }}</span><el-button v-if="canManage && !isLocked" link type="primary" @click="openEditor(shiftFor(row, shift.id))">编辑</el-button></template>
         </el-table-column>
           </el-table>
         </div>
       </section>
     </template>
   </section>
+  <el-dialog v-model="editorVisible" title="调整值班人员" width="420px">
+    <el-select v-model="editorPersonIds" multiple filterable placeholder="选择值班人员" style="width: 100%">
+      <el-option v-for="person in eligiblePersons" :key="person.id" :label="person.name" :value="person.id" />
+    </el-select>
+    <template #footer><el-button @click="editorVisible = false">取消</el-button><el-button type="primary" @click="saveEditor">保存</el-button></template>
+  </el-dialog>
 </template>
 
 <script setup lang="ts">
@@ -124,6 +132,7 @@ import { useRouter } from 'vue-router'
 import { httpClient, resolveErrorMessage } from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
 import { useRoomContextStore } from '@/stores/room-context'
+import { usePermissionStore } from '@/stores/permission'
 
 interface ScheduleItem {
   id: number
@@ -142,6 +151,7 @@ interface ScheduleShift {
   shift_def_name: string
   persons: SchedulePerson[]
 }
+interface PersonOption { id: number; name: string }
 
 interface ScheduleDay {
   duty_date: string
@@ -153,6 +163,7 @@ interface ScheduleDay {
 
 const authStore = useAuthStore()
 const roomContextStore = useRoomContextStore()
+const permissionStore = usePermissionStore()
 const router = useRouter()
 const loading = ref(false)
 const schedule = ref<ScheduleItem | null>(null)
@@ -163,6 +174,11 @@ const actionDate = ref('')
 const listDateRange = ref<string[]>([])
 const personKeyword = ref('')
 const loadError = ref('')
+const editorVisible = ref(false)
+const editingShift = ref<ScheduleShift | undefined>()
+const editorPersonIds = ref<number[]>([])
+const eligiblePersons = ref<PersonOption[]>([])
+const canManage = computed(() => permissionStore.hasPermission('schedule:monthly:generate'))
 
 const monthKey = computed(() => {
   const year = calendarDate.value.getFullYear()
@@ -267,6 +283,28 @@ function weekdayLabel(weekday: number): string {
 
 function openActionMenu(day: string): void {
   if (isMyDay(day) && !isLocked.value) actionDate.value = actionDate.value === day ? '' : day
+}
+
+async function openEditor(shift?: ScheduleShift): Promise<void> {
+  if (!shift || !schedule.value) return
+  editingShift.value = shift; editorPersonIds.value = shift.persons.map((person) => person.person_id)
+  if (!eligiblePersons.value.length) {
+    const response = await httpClient.get<PersonOption[]>(`/schedules/${schedule.value.id}/eligible-persons`)
+    eligiblePersons.value = response.data
+  }
+  editorVisible.value = true
+}
+async function saveEditor(): Promise<void> {
+  if (!schedule.value || !editingShift.value) return
+  try {
+    await httpClient.put(`/schedules/${schedule.value.id}/shifts/${editingShift.value.id}/persons`, { person_ids: editorPersonIds.value })
+    editorVisible.value = false; ElMessage.success('排班调整已保存，请发布后生效'); await loadSchedule()
+  } catch (error) { ElMessage.error(resolveErrorMessage(error, '保存排班调整失败')) }
+}
+async function publishSchedule(): Promise<void> {
+  if (!schedule.value) return
+  try { await httpClient.post(`/schedules/${schedule.value.id}/publish`); ElMessage.success('排班已发布'); await loadSchedule() }
+  catch (error) { ElMessage.error(resolveErrorMessage(error, '发布排班失败')) }
 }
 
 function showPlaceholder(action: string): void {
