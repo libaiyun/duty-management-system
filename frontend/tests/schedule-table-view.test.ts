@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { router as appRouter } from '@/router'
 import { httpClient } from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
+import { usePermissionStore } from '@/stores/permission'
 import { useRoomContextStore } from '@/stores/room-context'
 import { createTestPinia } from './helpers'
 import ScheduleTableView from '@/views/schedule/ScheduleTableView.vue'
@@ -28,7 +29,7 @@ const days = [
   },
 ]
 
-async function mountView(coverageThrough = '2099-12-31') {
+async function mountView(coverageThrough = '2099-12-31', canManage = false, scheduleStatus = 'published') {
   const pinia = createTestPinia()
   const authStore = useAuthStore()
   authStore.personId = 11
@@ -36,10 +37,11 @@ async function mountView(coverageThrough = '2099-12-31') {
   authStore.roomName = '发射机房'
   const roomContextStore = useRoomContextStore()
   roomContextStore.selectRoom(1)
+  if (canManage) usePermissionStore().setPermissions(['schedule:monthly:generate'])
 
   vi.mocked(httpClient.get).mockImplementation((path: string) => {
     if (path.startsWith('/schedules?')) {
-      return Promise.resolve({ code: 'OK', message: 'success', data: { items: [{ id: 99, status: 'published', coverage_through: coverageThrough }] }, trace_id: '' })
+      return Promise.resolve({ code: 'OK', message: 'success', data: { items: [{ id: 99, status: scheduleStatus, coverage_through: coverageThrough }] }, trace_id: '' })
     }
     return Promise.resolve({ code: 'OK', message: 'success', data: days, trace_id: '' })
   })
@@ -69,7 +71,7 @@ describe('ScheduleTableView', () => {
   })
 
   it('extends coverage before loading an uncovered month', async () => {
-    await mountView('2000-01-01')
+    await mountView('2000-01-01', true)
     expect(httpClient.post).toHaveBeenCalledWith(expect.stringMatching(/^\/schedules\/99\/generate\?through=\d{4}-\d{2}-\d{2}$/))
   })
 
@@ -87,14 +89,29 @@ describe('ScheduleTableView', () => {
     expect(wrapper.text()).toContain('国庆节')
   })
 
-  it('provides an enabled export-history entry', async () => {
-    const wrapper = await mountView()
+  it('creates the current-month export before opening its history', async () => {
+    const wrapper = await mountView('2099-12-31', true)
     const push = vi.spyOn(appRouter, 'push').mockResolvedValue(undefined)
     const exportButton = wrapper.findAll('button').find((button) => button.text().includes('导出 Excel'))
 
     expect((exportButton?.element as HTMLButtonElement).disabled).toBe(false)
     await exportButton?.trigger('click')
+    expect(httpClient.post).toHaveBeenCalledWith('/exports/schedule', expect.objectContaining({ schedule_id: 99 }))
     expect(push).toHaveBeenCalledWith('/export-history')
+  })
+
+  it('does not expose the export action to read-only users', async () => {
+    const wrapper = await mountView()
+    expect(wrapper.findAll('button').some((button) => button.text().includes('导出 Excel'))).toBe(false)
+  })
+
+  it('lets a manager publish an adjusted draft schedule', async () => {
+    const wrapper = await mountView('2099-12-31', true, 'draft')
+    const publishButton = wrapper.findAll('button').find((button) => button.text().includes('发布排班'))
+
+    expect(publishButton?.exists()).toBe(true)
+    await publishButton?.trigger('click')
+    expect(httpClient.post).toHaveBeenCalledWith('/schedules/99/publish')
   })
 
   it('switches to the list view with dynamic shift columns', async () => {
@@ -115,6 +132,7 @@ describe('ScheduleTableView', () => {
     expect(wrapper.find('button.schedule-table-view__reset').text()).toBe('重置')
     expect(wrapper.find('#schedule-shift').exists()).toBe(false)
   })
+
 })
 
 describe('ScheduleTableView route', () => {

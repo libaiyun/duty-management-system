@@ -12,7 +12,7 @@
           {{ statusLabel(schedule.status) }}
         </el-tag>
         <el-button v-if="canManage && schedule?.status === 'draft'" type="primary" @click="publishSchedule">发布排班</el-button>
-        <el-button @click="openExportHistory">导出 Excel</el-button>
+        <el-button v-if="canManage" @click="openExportHistory">导出 Excel</el-button>
       </div>
     </div>
 
@@ -225,7 +225,7 @@ async function loadSchedule(): Promise<void> {
     const [year, month] = monthKey.value.split('-')
     const monthEnd = new Date(Number(year), Number(month), 0)
     const through = `${monthEnd.getFullYear()}-${String(monthEnd.getMonth() + 1).padStart(2, '0')}-${String(monthEnd.getDate()).padStart(2, '0')}`
-    if (!schedule.value.coverage_through || schedule.value.coverage_through < through) {
+    if (canManage.value && (!schedule.value.coverage_through || schedule.value.coverage_through < through)) {
       await httpClient.post(`/schedules/${schedule.value.id}/generate?through=${through}`)
     }
     const daysResponse = await httpClient.get<ScheduleDay[]>(`/schedules/${schedule.value.id}/days?year=${year}&month=${Number(month)}`)
@@ -303,16 +303,35 @@ async function saveEditor(): Promise<void> {
 }
 async function publishSchedule(): Promise<void> {
   if (!schedule.value) return
-  try { await httpClient.post(`/schedules/${schedule.value.id}/publish`); ElMessage.success('排班已发布'); await loadSchedule() }
-  catch (error) { ElMessage.error(resolveErrorMessage(error, '发布排班失败')) }
+  try {
+    await httpClient.post(`/schedules/${schedule.value.id}/publish`)
+    ElMessage.success('排班已发布')
+    await loadSchedule()
+  } catch (error) {
+    ElMessage.error(resolveErrorMessage(error, '发布排班失败'))
+  }
 }
-
 function showPlaceholder(action: string): void {
   ElMessage.info(`${action}功能将在后续任务中开放`)
 }
 
-function openExportHistory(): void {
-  void router.push('/export-history')
+async function openExportHistory(): Promise<void> {
+  if (!schedule.value) {
+    ElMessage.warning('当前机房暂无可导出的排班')
+    return
+  }
+  try {
+    const [year, month] = monthKey.value.split('-')
+    await httpClient.post('/exports/schedule', {
+      schedule_id: schedule.value.id,
+      year: Number(year),
+      month: Number(month),
+    })
+    ElMessage.success('值班表已生成')
+    await router.push('/export-history')
+  } catch (error) {
+    ElMessage.error(resolveErrorMessage(error, '导出值班表失败'))
+  }
 }
 
 function statusLabel(status: string): string {

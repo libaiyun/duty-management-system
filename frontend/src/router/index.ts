@@ -22,6 +22,7 @@ const CUSTOM_VIEWS: Record<string, unknown> = {
   'holiday-standard': () => import('@/views/base-data/HolidayView.vue'),
   'schedule-table': () => import('@/views/schedule/ScheduleTableView.vue'),
   'actual-duty': () => import('@/views/schedule/ActualDutyView.vue'),
+  'export-history': () => import('@/views/schedule/ExportHistoryView.vue'),
 }
 
 function buildRoutes(items: MenuItem[]): RouteRecordRaw[] {

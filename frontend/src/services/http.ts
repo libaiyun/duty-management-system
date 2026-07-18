@@ -59,7 +59,7 @@ export class HttpClient {
 
   constructor(options: HttpClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? import.meta.env.VITE_API_BASE_URL ?? '/api/v1'
-    this.fetcher = options.fetcher ?? fetch
+    this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis)
     this.callbacks = options.callbacks ?? {}
   }
 
@@ -82,6 +82,19 @@ export class HttpClient {
 
   async delete<T>(path: string): Promise<ApiResponse<T>> {
     return this.request<T>('DELETE', path)
+  }
+
+  async getBlob(path: string): Promise<Blob> {
+    const headers: Record<string, string> = { Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }
+    const token = this.callbacks.getToken?.()
+    if (token) headers.Authorization = `Bearer ${token}`
+    const roomId = this.callbacks.getCurrentRoomId?.()
+    if (roomId) headers['X-Current-Room-Id'] = String(roomId)
+    let response: Response
+    try { response = await this.fetcher(this.createUrl(path), { method: 'GET', headers }) }
+    catch (err) { throw new NetworkError(err instanceof Error ? err.message : '网络连接失败，请检查网络') }
+    if (!response.ok) throw await parseApiError(response)
+    return response.blob()
   }
 
   async getPage<T>(path: string, params: PageParams): Promise<ApiResponse<PageResponse<T>>> {

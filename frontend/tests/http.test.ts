@@ -123,6 +123,20 @@ describe('HttpClient', () => {
     )
     expect(res.data.total).toBe(0)
   })
+
+  it('downloads a blob with authentication and room headers', async () => {
+    const blob = new Blob(['xlsx'])
+    const fetcher = vi.fn().mockResolvedValue({ ok: true, status: 200, blob: vi.fn().mockResolvedValue(blob) })
+    const client = new HttpClient({
+      baseUrl: '/api/v1', fetcher: fetcher as Fetcher,
+      callbacks: { getToken: () => 'token-abc', getCurrentRoomId: () => 7 },
+    })
+
+    await expect(client.getBlob('/exports/1/download')).resolves.toBe(blob)
+    expect(fetcher).toHaveBeenCalledWith('/api/v1/exports/1/download', expect.objectContaining({
+      method: 'GET', headers: expect.objectContaining({ Authorization: 'Bearer token-abc', 'X-Current-Room-Id': '7' }),
+    }))
+  })
 })
 
 describe('HttpClient error handling', () => {
