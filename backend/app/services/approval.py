@@ -1,6 +1,7 @@
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import select, update
+from sqlalchemy import select, true, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import BusinessRuleError, ForbiddenError, NotFoundError, StateConflictError
@@ -32,13 +33,13 @@ def complete_task(
     if action == "reject" and not (opinion or "").strip():
         raise BusinessRuleError(message="拒绝时必须填写审批意见")
     status = "approved" if action == "approve" else "rejected"
-    assignee_filter = True if allow_room_approval else ApprovalTask.assignee_user_id == operator_user_id
-    result = db.execute(
+    assignee_filter = true() if allow_room_approval else ApprovalTask.assignee_user_id == operator_user_id
+    result = cast(CursorResult[Any], db.execute(
         update(ApprovalTask).where(
             ApprovalTask.id == task_id, assignee_filter,
             ApprovalTask.status == "pending",
         ).values(status=status, handled_at=_utcnow(), updated_by=operator_user_id, version=ApprovalTask.version + 1)
-    )
+    ))
     if result.rowcount != 1:
         task = db.scalar(select(ApprovalTask).where(ApprovalTask.id == task_id))
         if task is None:

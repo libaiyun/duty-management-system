@@ -10,7 +10,7 @@ import {
   Setting,
 } from '@element-plus/icons-vue'
 
-import type { MenuItem } from '@/types/menu'
+import type { MenuItem, PersonalAccess } from '@/types/menu'
 import type { PermissionCode } from '@/types/permission'
 import { PERMISSION_CODES } from '@/types/permission'
 
@@ -29,27 +29,28 @@ export const menuItems: MenuItem[] = [
     title: '排班表',
     icon: Calendar,
     permission: PC.SCHEDULE_MONTHLY_VIEW,
+    personalAccess: 'bound',
   },
   {
     name: 'swap-request',
     path: '/swap-request',
     title: '换班申请',
     icon: Clock,
-    permission: PC.DUTY_SWAP_VIEW_SELF,
+    personalAccess: 'participating_operator',
   },
   {
     name: 'leave-request',
     path: '/leave-request',
     title: '请假申请',
     icon: Clock,
-    permission: PC.DUTY_LEAVE_VIEW_SELF,
+    personalAccess: 'participating_operator',
   },
   {
     name: 'my-cover',
     path: '/my-cover',
     title: '我的顶班',
     icon: Clock,
-    permission: PC.DUTY_COVER_VIEW_SELF,
+    personalAccess: 'cover_eligible',
   },
   {
     name: 'approval-center',
@@ -144,17 +145,25 @@ export const menuItems: MenuItem[] = [
 export function filterMenuByPermission(
   menus: MenuItem[],
   hasPermission: (code: PermissionCode) => boolean,
+  hasPersonalAccess: (access: PersonalAccess) => boolean = () => false,
 ): MenuItem[] {
+  const canAccess = (item: MenuItem): boolean => {
+    if (!item.permission && !item.personalAccess) return true
+    return Boolean(
+      (item.permission && hasPermission(item.permission))
+      || (item.personalAccess && hasPersonalAccess(item.personalAccess)),
+    )
+  }
   return menus
     .map((item) => {
       if (item.children) {
         const visibleChildren = item.children.filter(
-          (child) => !child.permission || hasPermission(child.permission),
+          (child) => canAccess(child),
         )
         if (visibleChildren.length === 0) return null
         return { ...item, children: visibleChildren }
       }
-      if (item.permission && !hasPermission(item.permission)) return null
+      if (!canAccess(item)) return null
       return item
     })
     .filter((item): item is MenuItem => item !== null)

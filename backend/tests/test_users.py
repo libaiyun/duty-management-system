@@ -1,11 +1,10 @@
 import pytest
-from fastapi.testclient import TestClient
-
+from app.core.permissions import BUILTIN_ROLES
 from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.user import SysPermission, SysRole
-from app.core.role_matrix import CANONICAL_ROLE_CODES
-from app.services.auth import create_user, seed_role_matrix
+from app.services.auth import create_user, seed_permission_system
+from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -48,6 +47,19 @@ class TestUserApi:
         assert data["display_name"] == "新用户"
         assert data["status"] == "enabled"
 
+    def test_create_user_with_duplicate_username_returns_conflict(
+        self, api_client: TestClient, db_session,
+    ) -> None:
+        _, token = _create_admin(api_client, db_session)
+        headers = {"Authorization": f"Bearer {token}"}
+        payload = {"username": "duplicate-user", "password": "pass123", "display_name": "用户"}
+        assert api_client.post("/api/v1/users", json=payload, headers=headers).status_code == 200
+
+        resp = api_client.post("/api/v1/users", json=payload, headers=headers)
+
+        assert resp.status_code == 409
+        assert resp.json()["code"] == "STATE_CONFLICT"
+
     def test_get_user_detail(self, api_client: TestClient, db_session) -> None:
         admin_id, token = _create_admin(api_client, db_session)
         resp = api_client.get(f"/api/v1/users/{admin_id}", headers={"Authorization": f"Bearer {token}"})
@@ -73,10 +85,22 @@ class TestUserApi:
         assert resp.status_code == 200
         assert resp.json()["data"]["status"] == "disabled"
 
+    def test_update_user_rejects_unknown_status(self, api_client: TestClient, db_session) -> None:
+        user_id, token = _create_admin(api_client, db_session)
+
+        resp = api_client.put(
+            f"/api/v1/users/{user_id}",
+            json={"status": "unexpected"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION_ERROR"
+
     def test_assign_user_roles(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
-        seed_role_matrix(db_session)
-        role = db_session.query(SysRole).filter_by(code="duty_operator").one()
+        seed_permission_system(db_session)
+        role = db_session.query(SysRole).filter_by(code="schedule_admin").one()
 
         resp = api_client.post(
             "/api/v1/users",
@@ -93,7 +117,7 @@ class TestUserApi:
         assert resp.status_code == 200
 
     def test_users_requires_permission(self, api_client: TestClient, db_session) -> None:
-        user = create_user(db_session, "worker", "pass", "普通用户")
+        create_user(db_session, "worker", "pass", "普通用户")
         db_session.commit()
         token = _login(api_client, db_session, "worker", "pass")
 
@@ -133,7 +157,7 @@ class TestUserApi:
 
 
 class TestRoleApi:
-    def test_create_role_is_rejected_for_fixed_matrix(self, api_client: TestClient, db_session) -> None:
+    def test_create_role(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
 
         resp = api_client.post(
@@ -141,21 +165,37 @@ class TestRoleApi:
             json={"code": "viewer", "name": "查看者", "remark": "只读"},
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 403
+        assert resp.status_code == 200
+        assert resp.json()["data"]["code"] == "viewer"
 
     def test_list_roles(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
-        seed_role_matrix(db_session)
+        seed_permission_system(db_session)
 
         resp = api_client.get("/api/v1/roles", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
-        assert {role["code"] for role in resp.json()["data"]} == CANONICAL_ROLE_CODES
+        assert set(BUILTIN_ROLES) <= {role["code"] for role in resp.json()["data"]}
 
     def test_get_permissions(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)
 
         resp = api_client.get("/api/v1/permissions", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
+
+    def test_update_role_rejects_unknown_status(self, api_client: TestClient, db_session) -> None:
+        _, token = _create_admin(api_client, db_session)
+        role = SysRole(code="status-boundary-role", name="状态边界")
+        db_session.add(role)
+        db_session.commit()
+
+        resp = api_client.put(
+            f"/api/v1/roles/{role.id}",
+            json={"status": "unexpected"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["code"] == "VALIDATION_ERROR"
 
 
 class TestUserPersonBinding:

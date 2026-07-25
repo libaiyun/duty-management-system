@@ -80,7 +80,7 @@ def update_person_endpoint(
     p = update_person(
         db, person_id,
         org_unit_id=room_id,
-        name=body.name, phone=body.phone,
+        name=body.name, person_type=body.person_type, phone=body.phone,
         participate_schedule=body.participate_schedule,
         status=body.status, remark=body.remark,
     )

@@ -1,9 +1,9 @@
 import pytest
-from fastapi.testclient import TestClient
-
 from app.models.organization import OrgUnit
-from app.models.user import SysDataScope, SysPermission, SysRole
+from app.models.person import Person
+from app.models.user import SysPermission, SysRole
 from app.services.auth import create_user
+from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -22,7 +22,7 @@ def _create_admin(api_client: TestClient, db_session) -> tuple[int, str]:
     db_session.add_all([perm, role])
     user.roles.append(role)
     db_session.flush()
-    db_session.add(SysDataScope(user_id=user.id, scope_type="all", org_unit_id=None))
+    user.is_superuser = True
     db_session.commit()
     token = _login(api_client, db_session, "admin", "password123")
     return user.id, token
@@ -157,7 +157,7 @@ class TestOrgUnitApi:
         assert resp.json()["code"] == "STATE_CONFLICT"
 
     def test_org_units_requires_permission(self, api_client: TestClient, db_session) -> None:
-        user = create_user(db_session, "worker", "pass", "普通用户")
+        create_user(db_session, "worker", "pass", "普通用户")
         db_session.commit()
         token = _login(api_client, db_session, "worker", "pass")
 
@@ -325,11 +325,17 @@ class TestOrgUnitManager:
         assert resp.json()["data"]["manager_person_id"] == person.id
 
 
-class TestOrgUnitDataScope:
+class TestOrgUnitGlobalScope:
     def _create_scoped_user(
         self, api_client: TestClient, db_session, username: str, scope_org_id: int,
     ) -> str:
-        user = create_user(db_session, username, "pass123", username)
+        person = Person(
+            code=f"{username}-person", name=username, person_type="duty_operator",
+            org_unit_id=scope_org_id,
+        )
+        db_session.add(person)
+        db_session.flush()
+        user = create_user(db_session, username, "pass123", username, person_id=person.id)
         perm = db_session.query(SysPermission).filter(SysPermission.code == "org:unit:view").first()
         if perm is None:
             perm = SysPermission(code="org:unit:view", name="View Org", type="api")
@@ -339,11 +345,10 @@ class TestOrgUnitDataScope:
         db_session.add(role)
         user.roles.append(role)
         db_session.flush()
-        db_session.add(SysDataScope(user_id=user.id, scope_type="room", org_unit_id=scope_org_id))
         db_session.commit()
         return _login(api_client, db_session, username, "pass123")
 
-    def test_room_scope_filters_org_units(self, api_client: TestClient, db_session) -> None:
+    def test_bound_account_with_permission_sees_all_org_units(self, api_client: TestClient, db_session) -> None:
         _, admin_token = _create_admin(api_client, db_session)
         r1 = api_client.post(
             "/api/v1/org-units",
@@ -360,17 +365,15 @@ class TestOrgUnitDataScope:
         resp = api_client.get("/api/v1/org-units", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
         data = resp.json()["data"]
-        assert len(data) == 1
-        assert data[0]["id"] == r1
+        assert {item["name"] for item in data} == {"机房1", "机房2"}
 
-    def test_no_scope_returns_empty(self, api_client: TestClient, db_session) -> None:
+    def test_unbound_account_with_permission_sees_all_org_units(self, api_client: TestClient, db_session) -> None:
         _, admin_token = _create_admin(api_client, db_session)
         api_client.post(
             "/api/v1/org-units",
             json={"code": "room-x", "name": "机房", "type": "room"},
             headers={"Authorization": f"Bearer {admin_token}"},
         )
-        # 有权限但无数据范围
         user = create_user(db_session, "noscope", "pass123", "无范围")
         perm = db_session.query(SysPermission).filter(SysPermission.code == "org:unit:view").first()
         role = SysRole(code="role-noscope", name="noscope")
@@ -382,7 +385,7 @@ class TestOrgUnitDataScope:
 
         resp = api_client.get("/api/v1/org-units", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200
-        assert resp.json()["data"] == []
+        assert [item["name"] for item in resp.json()["data"]] == ["机房"]
 
 
 class TestOrgUnitModel:

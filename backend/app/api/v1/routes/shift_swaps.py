@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import RequirePermission, get_db, get_page_params, resolve_current_room_id
+from app.api.deps import get_authenticated_user, get_db, get_page_params, resolve_current_room_id
 from app.core.exceptions import ForbiddenError
 from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson, ShiftSwap
 from app.models.shift import ShiftDef
@@ -22,16 +22,18 @@ def _response(swap: ShiftSwap) -> ShiftSwapResponse:
 
 
 @router.post("", response_model=ApiResponse[ShiftSwapResponse])
-def create(payload: ShiftSwapCreateRequest, request: Request, db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("swap:apply:create"))):
+def create(payload: ShiftSwapCreateRequest, request: Request, db: Session = Depends(get_db), user: SysUser = Depends(get_authenticated_user)) -> ApiResponse[ShiftSwapResponse]:
     swap = create_swap(db, payload, user, resolve_current_room_id(request, db, user))
     db.commit()
     return ok(_response(get_swap(db, swap.id)))
 
 
 @router.get("", response_model=ApiResponse[PageResponse[ShiftSwapResponse]])
-def list_swaps(view: str = Query("related", pattern="^(initiated|pending|related)$"), paging: PageParams = Depends(get_page_params), db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("duty:swap:view_self"))):
+def list_swaps(request: Request, view: str = Query("related", pattern="^(initiated|pending|related)$"), paging: PageParams = Depends(get_page_params), db: Session = Depends(get_db), user: SysUser = Depends(get_authenticated_user)) -> ApiResponse[PageResponse[ShiftSwapResponse]]:
     if user.person_id is None:
         raise ForbiddenError(message="当前账号未绑定人员")
+    # Personal operations still require an enabled person bound to an enabled room.
+    resolve_current_room_id(request, db, user)
     condition = ShiftSwap.applicant_person_id == user.person_id if view == "initiated" else ShiftSwap.target_person_id == user.person_id if view == "pending" else or_(ShiftSwap.applicant_person_id == user.person_id, ShiftSwap.target_person_id == user.person_id)
     stmt = select(ShiftSwap).where(condition).options(
         selectinload(ShiftSwap.applicant), selectinload(ShiftSwap.target_person),
@@ -44,7 +46,7 @@ def list_swaps(view: str = Query("related", pattern="^(initiated|pending|related
 
 
 @router.get("/eligible-persons", response_model=ApiResponse[list[dict[str, object]]])
-def eligible_persons(request: Request, db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("swap:apply:create"))):
+def eligible_persons(request: Request, db: Session = Depends(get_db), user: SysUser = Depends(get_authenticated_user)) -> ApiResponse[list[dict[str, object]]]:
     """Return only same-room, enabled, account-bound duty operators for the form."""
     room_id = resolve_current_room_id(request, db, user)
     from app.models.person import Person
@@ -69,7 +71,7 @@ def eligible_persons(request: Request, db: Session = Depends(get_db), user: SysU
 
 
 @router.get("/eligible-shifts", response_model=ApiResponse[list[dict[str, object]]])
-def eligible_shifts(person_id: int, request: Request, db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("swap:apply:create"))):
+def eligible_shifts(person_id: int, request: Request, db: Session = Depends(get_db), user: SysUser = Depends(get_authenticated_user)) -> ApiResponse[list[dict[str, object]]]:
     room_id = resolve_current_room_id(request, db, user)
     rows = db.execute(
         select(ScheduleShift.id, ScheduleDay.duty_date, ShiftDef.name.label("shift_name"), ScheduleShift.start_at)
@@ -84,7 +86,7 @@ def eligible_shifts(person_id: int, request: Request, db: Session = Depends(get_
         )
         .order_by(ScheduleDay.duty_date)
     ).all()
-    # The service remains the authority for published/locked/duplicate validation.
+    # The service remains the authority for published/date/duplicate validation.
     return ok([{
         "id": row.id,
         "duty_date": row.duty_date.isoformat(),
@@ -94,28 +96,30 @@ def eligible_shifts(person_id: int, request: Request, db: Session = Depends(get_
 
 
 @router.post("/{swap_id}/target-confirm", response_model=ApiResponse[ShiftSwapResponse])
-def confirm(swap_id: int, payload: ShiftSwapActionRequest, request: Request, db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("swap:apply:confirm"))):
+def confirm(swap_id: int, payload: ShiftSwapActionRequest, request: Request, db: Session = Depends(get_db), user: SysUser = Depends(get_authenticated_user)) -> ApiResponse[ShiftSwapResponse]:
     swap = target_confirm(db, swap_id, user, approve=True, opinion=payload.opinion, room_id=resolve_current_room_id(request, db, user))
     db.commit()
     return ok(_response(get_swap(db, swap.id)))
 
 
 @router.post("/{swap_id}/target-reject", response_model=ApiResponse[ShiftSwapResponse])
-def reject_target(swap_id: int, payload: ShiftSwapActionRequest, request: Request, db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("swap:apply:confirm"))):
+def reject_target(swap_id: int, payload: ShiftSwapActionRequest, request: Request, db: Session = Depends(get_db), user: SysUser = Depends(get_authenticated_user)) -> ApiResponse[ShiftSwapResponse]:
     swap = target_confirm(db, swap_id, user, approve=False, opinion=payload.opinion, room_id=resolve_current_room_id(request, db, user))
     db.commit()
     return ok(_response(get_swap(db, swap.id)))
 
 
 @router.post("/{swap_id}/withdraw", response_model=ApiResponse[ShiftSwapResponse])
-def withdraw(swap_id: int, db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("swap:apply:create"))):
-    swap = withdraw_or_cancel(db, swap_id, user)
+def withdraw(swap_id: int, request: Request, db: Session = Depends(get_db), user: SysUser = Depends(get_authenticated_user)) -> ApiResponse[ShiftSwapResponse]:
+    swap = withdraw_or_cancel(db, swap_id, user, room_id=resolve_current_room_id(request, db, user))
     db.commit()
     return ok(_response(get_swap(db, swap.id)))
 
 
 @router.post("/{swap_id}/cancel", response_model=ApiResponse[ShiftSwapResponse])
-def cancel(swap_id: int, db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("swap:apply:create"))):
-    swap = withdraw_or_cancel(db, swap_id, user, cancel=True)
+def cancel(swap_id: int, request: Request, db: Session = Depends(get_db), user: SysUser = Depends(get_authenticated_user)) -> ApiResponse[ShiftSwapResponse]:
+    swap = withdraw_or_cancel(
+        db, swap_id, user, cancel=True, room_id=resolve_current_room_id(request, db, user),
+    )
     db.commit()
     return ok(_response(get_swap(db, swap.id)))

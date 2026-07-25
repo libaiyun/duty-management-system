@@ -7,8 +7,8 @@ const ROOM_KEY = 'duty_current_room_id'
 
 interface OrgUnitItem {
   id: number
+  code: string
   name: string
-  type: string
 }
 
 export const useRoomContextStore = defineStore('room-context', {
@@ -34,8 +34,8 @@ export const useRoomContextStore = defineStore('room-context', {
       const authStore = useAuthStore()
       if (!authStore.canSwitchRoom || this.rooms.length > 0) return
 
-      const response = await httpClient.get<OrgUnitItem[]>('/org-units')
-      this.rooms = response.data.filter((unit) => unit.type === 'room')
+      const response = await httpClient.get<OrgUnitItem[]>('/auth/rooms')
+      this.rooms = response.data
       if (!this.rooms.some((room) => room.id === this.selectedRoomId)) {
         this.selectRoom(this.rooms[0]?.id ?? null)
       }

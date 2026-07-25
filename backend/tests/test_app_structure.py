@@ -1,9 +1,8 @@
 import importlib
 
-from fastapi import FastAPI
-
 from app.core.metadata import APP_NAME
 from app.main import create_app
+from fastapi import FastAPI
 
 
 def test_create_app_returns_fastapi_instance() -> None:

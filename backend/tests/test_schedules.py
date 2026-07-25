@@ -15,7 +15,7 @@ from app.models.schedule import (
     ScheduleShiftPerson,
 )
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleVersion
-from app.models.user import SysDataScope, SysPermission, SysRole
+from app.models.user import SysPermission, SysRole
 from app.services.auth import create_user
 from app.services.schedule import apply_historical_correction
 from fastapi.testclient import TestClient
@@ -36,7 +36,7 @@ def _create_admin(api_client: TestClient, db_session, select_room: bool = True) 
         room = OrgUnit(code="admin-current-room", name="管理员当前机房", type="room")
         db_session.add(room)
         db_session.flush()
-    user = create_user(db_session, "admin", "password123", "管理员")
+    user = create_user(db_session, "admin", "password123", "管理员", is_superuser=True)
     permissions = [
         SysPermission(code="schedule:monthly:view", name="View Schedule", type="api"),
         SysPermission(code="schedule:monthly:generate", name="Generate Schedule", type="api"),
@@ -49,7 +49,6 @@ def _create_admin(api_client: TestClient, db_session, select_room: bool = True) 
     db_session.add_all([*permissions, role])
     user.roles.append(role)
     db_session.flush()
-    db_session.add(SysDataScope(user_id=user.id, scope_type="all", org_unit_id=None))
     db_session.commit()
     token = _login(api_client, db_session, "admin", "password123")
     if select_room:
@@ -70,7 +69,6 @@ def _create_scoped_user(api_client: TestClient, db_session, username: str, org_u
     db_session.add_all([perm, role])
     user.roles.append(role)
     db_session.flush()
-    db_session.add(SysDataScope(user_id=user.id, scope_type="room", org_unit_id=org_unit_id))
     db_session.commit()
     token = _login(api_client, db_session, username, "password123")
     return user.id, token
@@ -918,12 +916,10 @@ class TestScheduleGenerateApi:
         assert db_session.get(MonthlySchedule, ms.id).version == 1
         assert db_session.scalar(select(DutyChangeLedger).where(DutyChangeLedger.schedule_shift_id == shift_id)) is None
 
-    def test_edit_does_not_use_schedule_lock_as_a_date_operation_guard(self, api_client: TestClient, db_session) -> None:
+    def test_edit_published_schedule_uses_date_operation_guard(self, api_client: TestClient, db_session) -> None:
         ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
         _, token = _create_admin(api_client, db_session)
         assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
-        db_session.get(MonthlySchedule, ms.id).status = "locked"
-        db_session.commit()
         shift_id = _shift_id_for_date(db_session, ms.id)
         response = api_client.put(
             f"/api/v1/schedules/{ms.id}/shifts/{shift_id}/persons", json={"person_ids": [persons[0].id, persons[1].id]},
@@ -943,27 +939,39 @@ class TestScheduleGenerateApi:
         assert response.status_code == 422
         assert "历史班次" in response.json()["message"]
 
-    def test_historical_correction_requires_director_role(self, api_client: TestClient, db_session) -> None:
-        ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
+    def test_superuser_can_perform_historical_correction(self, api_client: TestClient, db_session) -> None:
+        ms, _rule, _version, _org, _early, _persons = self._setup_published_rule_with_schedule(db_session)
         _, token = _create_admin(api_client, db_session)
         assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
         shift_id = _shift_id_for_date(db_session, ms.id, historical=True)
+        current_ids = db_session.scalars(
+            select(ScheduleShiftPerson.person_id)
+            .where(ScheduleShiftPerson.schedule_shift_id == shift_id)
+            .order_by(ScheduleShiftPerson.position_no)
+        ).all()
         response = api_client.post(
             f"/api/v1/schedules/{ms.id}/shifts/{shift_id}/history-corrections",
-            json={"person_ids": [persons[1].id, persons[0].id], "reason": "补录历史调整"},
+            json={"person_ids": list(reversed(current_ids)), "reason": "补录历史调整"},
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert response.status_code == 403
+        assert response.status_code == 200
 
     def test_historical_correction_marks_month_for_recalculation(self, api_client: TestClient, db_session) -> None:
-        ms, _rule, _version, _org, _early, persons = self._setup_published_rule_with_schedule(db_session)
+        ms, _rule, _version, _org, _early, _persons = self._setup_published_rule_with_schedule(db_session)
         _, token = _create_admin(api_client, db_session)
         assert api_client.post(f"/api/v1/schedules/{ms.id}/generate", headers={"Authorization": f"Bearer {token}"}).status_code == 200
         shift_id = _shift_id_for_date(db_session, ms.id, historical=True)
         schedule = db_session.get(MonthlySchedule, ms.id)
         shift = db_session.get(ScheduleShift, shift_id)
         assert schedule is not None and shift is not None
-        apply_historical_correction(db_session, schedule, shift, [persons[1].id, persons[0].id], "补录历史调整", actor_id=1)
+        current_ids = db_session.scalars(
+            select(ScheduleShiftPerson.person_id)
+            .where(ScheduleShiftPerson.schedule_shift_id == shift_id)
+            .order_by(ScheduleShiftPerson.position_no)
+        ).all()
+        apply_historical_correction(
+            db_session, schedule, shift, list(reversed(current_ids)), "补录历史调整", actor_id=1,
+        )
         db_session.commit()
         flag = db_session.scalar(select(ScheduleRecalculationFlag).where(
             ScheduleRecalculationFlag.org_unit_id == schedule.org_unit_id,

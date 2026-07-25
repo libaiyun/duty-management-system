@@ -3,9 +3,10 @@ from datetime import UTC, date, datetime, time
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
-from app.api.deps import RequirePermission, get_db, get_page_params, resolve_current_room_id
-from app.core.exceptions import ForbiddenError, NotFoundError
+from app.api.deps import RequirePermission, get_authenticated_user, get_db, get_page_params, resolve_current_room_id
+from app.core.exceptions import NotFoundError
 from app.models.approval import ApprovalRecord, ApprovalTask
 from app.models.schedule import ShiftSwap
 from app.models.user import SysUser
@@ -13,6 +14,7 @@ from app.schemas.approval import ApprovalActionRequest, ApprovalRecordResponse, 
 from app.schemas.pagination import PageParams, PageResponse
 from app.schemas.response import ApiResponse, ok
 from app.services.approval import complete_task
+from app.services.auth import check_user_permission
 from app.services.shift_swap import director_decide
 
 router = APIRouter(prefix="/approval-tasks", tags=["approval-tasks"])
@@ -24,20 +26,13 @@ def _response(task: ApprovalTask, opinion: str | None = None) -> ApprovalTaskRes
     return ApprovalTaskResponse(id=task.id, biz_type=task.biz_type, biz_id=task.biz_id, node_code=task.node_code, status=task.status, arrived_at=task.arrived_at, handled_at=task.handled_at, snapshot=snapshot, opinion=opinion)
 
 
-def _visibility_filter(user: SysUser, room_id: int):
+def _visibility_filter(user: SysUser, room_id: int) -> ColumnElement[bool]:
     return and_(
         ApprovalTask.org_unit_id == room_id,
         or_(
             ApprovalTask.node_code == "director_approval",
             ApprovalTask.assignee_user_id == user.id,
         ),
-    )
-
-
-def _is_personal_done_user(user: SysUser) -> bool:
-    role_codes = {role.code for role in user.roles}
-    return not bool(role_codes & {"deputy_director", "room_director"}) and bool(
-        role_codes & {"duty_operator", "maintenance"},
     )
 
 
@@ -82,17 +77,16 @@ def done(
     request: Request, paging: PageParams = Depends(get_page_params), biz_type: str | None = None, applicant: str | None = None,
     result: str | None = Query(None, pattern="^(approved|rejected)$"),
     arrived_from: date | None = Query(None, alias="arrived_from"), arrived_to: date | None = Query(None, alias="arrived_to"),
-    db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("approval:record:view_done")),
+    db: Session = Depends(get_db), user: SysUser = Depends(get_authenticated_user),
 ) -> ApiResponse[PageResponse[ApprovalTaskResponse]]:
-    return ok(_list(db, user, resolve_current_room_id(request, db, user), ("approved", "rejected"), paging, biz_type, applicant, result, _is_personal_done_user(user), arrived_from, arrived_to))
+    personal = not check_user_permission(db, user, "approval:record:view_done")
+    return ok(_list(db, user, resolve_current_room_id(request, db, user), ("approved", "rejected"), paging, biz_type, applicant, result, personal, arrived_from, arrived_to))
 
 
 def _act(task_id: int, payload: ApprovalActionRequest, action: str, request: Request, db: Session, user: SysUser) -> ApiResponse[ApprovalTaskResponse]:
     task = db.get(ApprovalTask, task_id)
     if task is None:
         raise NotFoundError(message="审批任务不存在")
-    if any(role.code == "system_admin" for role in user.roles):
-        raise ForbiddenError(message="系统管理员不可代替业务审批")
     room_id = resolve_current_room_id(request, db, user)
     if task.org_unit_id != room_id:
         raise NotFoundError(message="审批任务不存在")
@@ -102,9 +96,6 @@ def _act(task_id: int, payload: ApprovalActionRequest, action: str, request: Req
         allow_room_approval=task.node_code == "director_approval",
     )
     if task.biz_type == "shift_swap" and task.node_code == "director_approval" and db.get(ShiftSwap, task.biz_id) is not None:
-        role_codes = {role.code for role in user.roles}
-        if not role_codes & {"room_director", "deputy_director"}:
-            raise ForbiddenError(message="仅机房主任或副主任可审批换班")
         director_decide(db, task.biz_id, user, approve=action == "approve", opinion=payload.opinion)
     db.commit()
     db.refresh(record.task)
@@ -124,11 +115,11 @@ def reject(task_id: int, payload: ApprovalActionRequest, request: Request, db: S
 @records_router.get("", response_model=ApiResponse[PageResponse[ApprovalRecordResponse]])
 def list_records(
     request: Request, paging: PageParams = Depends(get_page_params), biz_type: str | None = None,
-    db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("approval:record:view_done")),
+    db: Session = Depends(get_db), user: SysUser = Depends(get_authenticated_user),
 ) -> ApiResponse[PageResponse[ApprovalRecordResponse]]:
     room_id = resolve_current_room_id(request, db, user)
     filters = [_visibility_filter(user, room_id), ApprovalRecord.action.in_(("approve", "reject"))]
-    if _is_personal_done_user(user):
+    if not check_user_permission(db, user, "approval:record:view_done"):
         filters.append(ApprovalTask.assignee_user_id == user.id)
     if biz_type:
         filters.append(ApprovalRecord.biz_type == biz_type)

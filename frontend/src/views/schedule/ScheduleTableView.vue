@@ -124,7 +124,7 @@
         <p v-if="shift.effective_change_summary">{{ shift.effective_change_summary }}</p>
         <p v-if="shift.pending_change_summary">{{ shift.pending_change_summary }}</p>
         <div class="schedule-table-view__detail-actions">
-          <el-button v-if="isMyShift(shift) && !isHistory(detailDate)" link type="primary" @click="openSwap(shift)">发起换班</el-button>
+          <el-button v-if="canInitiateSwap && isMyShift(shift) && !isHistory(detailDate)" link type="primary" @click="openSwap(shift)">发起换班</el-button>
           <el-button v-if="canEditShift(shift) && !isHistory(detailDate)" link type="primary" @click="openEditor(shift)">编辑最终排班</el-button>
           <el-button v-if="canCorrectHistory && isHistory(detailDate)" link type="primary" @click="openHistoricalCorrection(shift)">历史修正</el-button>
         </div>
@@ -196,8 +196,12 @@ const editingShift = ref<ScheduleShift | undefined>()
 const editorPersonIds = ref<number[]>([])
 const eligiblePersons = ref<PersonOption[]>([])
 const canManage = computed(() => permissionStore.hasPermission('schedule:monthly:generate'))
-const isSystemAdmin = computed(() => authStore.roleCodes.includes('system_admin'))
-const canCorrectHistory = computed(() => authStore.roleCodes.some((role) => role === 'room_director' || role === 'deputy_director'))
+const canCorrectHistory = computed(() => permissionStore.hasPermission('schedule:history:correct'))
+const canInitiateSwap = computed(() =>
+  authStore.personStatus === 'enabled'
+  && authStore.personType === 'duty_operator'
+  && authStore.participateSchedule,
+)
 
 const monthKey = computed(() => {
   const year = calendarDate.value.getFullYear()
@@ -205,7 +209,6 @@ const monthKey = computed(() => {
   return `${year}-${month}`
 })
 const displayMonth = computed(() => `${monthKey.value.slice(0, 4)}年${Number(monthKey.value.slice(5))}月`)
-const isLocked = computed(() => schedule.value?.status === 'locked')
 const daysByDate = computed(() => new Map(days.value.map((day) => [day.duty_date, day])))
 const detailDay = computed(() => dayFor(detailDate.value))
 const shiftColumns = computed(() => {
@@ -283,7 +286,7 @@ function isMyDay(day: string): boolean {
   return dayFor(day)?.shifts.some((shift) => shift.persons.some((person) => person.person_id === authStore.personId)) || false
 }
 function isMyShift(shift: ScheduleShift): boolean { return Boolean(authStore.personId && shift.persons.some((person) => person.person_id === authStore.personId)) }
-function canEditShift(shift: ScheduleShift): boolean { return canManage.value && (!isSystemAdmin.value || isMyShift(shift)) }
+function canEditShift(_shift: ScheduleShift): boolean { return canManage.value }
 
 function myShifts(day: string): ScheduleShift[] {
   if (!authStore.personId) return []
@@ -296,7 +299,6 @@ function dayClasses(day: string, type: string): Record<string, boolean> {
     'schedule-table-view__day--other-month': type !== 'current-month',
     'schedule-table-view__day--mine': isMyDay(day),
     'schedule-table-view__day--holiday': Boolean(dutyDay?.is_legal_holiday),
-    'schedule-table-view__day--locked': isLocked.value,
   }
 }
 
@@ -394,12 +396,11 @@ async function openExportHistory(): Promise<void> {
 }
 
 function statusLabel(status: string): string {
-  return { draft: '草稿', published: '已发布', locked: '已锁定' }[status] || status
+  return { draft: '草稿', published: '已发布' }[status] || status
 }
 
 function statusTagType(status: string): 'info' | 'success' | 'warning' {
   if (status === 'published') return 'success'
-  if (status === 'locked') return 'warning'
   return 'info'
 }
 </script>
@@ -441,7 +442,6 @@ function statusTagType(status: string): 'info' | 'success' | 'warning' {
 .schedule-table-view__day--holiday { background: #fff0f0; }
 .schedule-table-view__day--mine.schedule-table-view__day--holiday { background: linear-gradient(135deg, #edf8ee 50%, #fff0f0 50%); }
 .schedule-table-view__day--other-month { opacity: .45; }
-.schedule-table-view__day--locked { opacity: .65; }
 .schedule-table-view__date { display: flex; justify-content: space-between; margin-bottom: 2px; font-size: 13px; font-weight: 600; line-height: 16px; }
 .schedule-table-view__date small { color: var(--el-color-danger); font-size: 10px; }
 .schedule-table-view__shift { display: flex; gap: 3px; font-size: 11px; line-height: 16px; overflow: hidden; white-space: nowrap; }

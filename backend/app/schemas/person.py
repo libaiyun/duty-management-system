@@ -1,11 +1,15 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
+
+PersonType = Literal["duty_operator", "maintenance", "room_director", "deputy_director"]
 
 
 class PersonCreateRequest(BaseModel):
     org_unit_id: int | None = None
     code: str | None = Field(None, min_length=1, max_length=64)
     name: str = Field(..., min_length=1, max_length=64)
-    person_type: str = Field(..., min_length=1, max_length=32)
+    person_type: PersonType
     phone: str | None = None
     participate_schedule: bool = False
     remark: str | None = None
@@ -14,6 +18,7 @@ class PersonCreateRequest(BaseModel):
 class PersonUpdateRequest(BaseModel):
     org_unit_id: int | None = None
     name: str | None = Field(None, min_length=1, max_length=64)
+    person_type: PersonType | None = None
     phone: str | None = None
     participate_schedule: bool | None = None
     status: str | None = None

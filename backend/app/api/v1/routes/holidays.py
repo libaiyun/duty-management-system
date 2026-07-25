@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import RequirePermission, get_db, resolve_current_room_id
 from app.core.exceptions import NotFoundError
+from app.models.user import SysUser
 from app.schemas.holiday import (
     HolidayCreateRequest,
     HolidayImportRequest,
@@ -23,7 +24,6 @@ from app.services.holiday import (
     update_holiday,
     update_subsidy_standard,
 )
-from app.models.user import SysUser
 
 router = APIRouter(prefix="/holidays", tags=["holidays"])
 
@@ -42,7 +42,7 @@ def get_holidays(
 def get_standard(
     request: Request,
     db: Session = Depends(get_db),
-    user: SysUser = Depends(RequirePermission("holiday:standard:manage")),
+    user: SysUser = Depends(RequirePermission("holiday:standard:view")),
 ) -> ApiResponse[SubsidyStandardResponse]:
     standard = get_subsidy_standard(db, resolve_current_room_id(request, db, user))
     db.commit()

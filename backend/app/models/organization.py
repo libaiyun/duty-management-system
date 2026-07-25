@@ -14,7 +14,9 @@ class OrgUnit(BaseModel):
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     type: Mapped[str] = mapped_column(String(32), nullable=False)
     manager_person_id: Mapped[int | None] = mapped_column(
-        BigInteger, ForeignKey("person.id", ondelete="SET NULL"), nullable=True,
+        BigInteger,
+        ForeignKey("person.id", ondelete="SET NULL", name="fk_org_unit_manager_person", use_alter=True),
+        nullable=True,
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="enabled")
     sort_order: Mapped[int] = mapped_column(default=0)

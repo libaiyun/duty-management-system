@@ -64,8 +64,9 @@ describe('menuItems', () => {
     }
     const leaves = collectLeaves(menuItems)
     expect(leaves.length).toBeGreaterThan(0)
+    const personalPages = new Set(['home', 'schedule-table', 'swap-request', 'leave-request', 'my-cover'])
     for (const leaf of leaves) {
-      if (leaf.name === 'home') continue
+      if (personalPages.has(leaf.name)) continue
       expect(leaf.permission).toBeDefined()
     }
   })
@@ -74,7 +75,7 @@ describe('menuItems', () => {
 describe('filterMenuByPermission', () => {
   it('returns all items when user has all permissions', () => {
     const hasAll = () => true
-    const filtered = filterMenuByPermission(menuItems, hasAll)
+    const filtered = filterMenuByPermission(menuItems, hasAll, () => true)
     expect(filtered.length).toBe(menuItems.length)
   })
 
@@ -96,6 +97,22 @@ describe('filterMenuByPermission', () => {
     const hasNone = () => false
     const filtered = filterMenuByPermission(menuItems, hasNone)
 
-    expect(filtered).toHaveLength(1)
+    expect(filtered.map((item) => item.name)).toEqual(['home'])
+  })
+
+  it('shows personal entries only when the bound person has the required qualification', () => {
+    const dutyOperator = filterMenuByPermission(menuItems, () => false, (access) =>
+      ['bound', 'participating_operator'].includes(access),
+    )
+    const maintenance = filterMenuByPermission(menuItems, () => false, (access) =>
+      ['bound', 'cover_eligible'].includes(access),
+    )
+
+    expect(dutyOperator.map((item) => item.name)).toEqual([
+      'home', 'schedule-table', 'swap-request', 'leave-request',
+    ])
+    expect(maintenance.map((item) => item.name)).toEqual([
+      'home', 'schedule-table', 'my-cover',
+    ])
   })
 })

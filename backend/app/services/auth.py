@@ -1,12 +1,13 @@
-from dataclasses import dataclass
 from datetime import date, timedelta
+from typing import Any
 
 from sqlalchemy import exists, inspect, select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import Settings
-from app.core.exceptions import BusinessRuleError, NotFoundError, StateConflictError, UnauthorizedError
-from app.core.role_matrix import CANONICAL_ROLE_CODES, ROLE_MATRIX, canonical_permissions
+from app.core.exceptions import BusinessRuleError, ForbiddenError, NotFoundError, StateConflictError, UnauthorizedError
+from app.core.permissions import BUILTIN_ROLES, PERMISSIONS
 from app.core.security import (
     create_access_token,
     create_refresh_token,
@@ -17,7 +18,14 @@ from app.core.security import (
 from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
-from app.models.user import SysDataScope, SysPermission, SysRole, SysUser, sys_role_permission, sys_user_role
+from app.models.user import (
+    SysPermission,
+    SysRole,
+    SysUser,
+    sys_role_permission,
+    sys_user_permission,
+    sys_user_role,
+)
 from app.services.schedule import generate_schedule_from_rule
 
 
@@ -30,7 +38,7 @@ def _generated_code_suffix(number: int) -> str:
     return result
 
 
-def _generate_unique_code(db: Session, model, prefix: str, *scope) -> str:
+def _generate_unique_code(db: Session, model: Any, prefix: str, *scope: Any) -> str:
     number = 0
     while True:
         code = prefix if number == 0 else f"{prefix}_{_generated_code_suffix(number)}"
@@ -54,7 +62,12 @@ def authenticate_user(db: Session, username: str, password: str) -> SysUser:
     return user
 
 
-def create_user(db: Session, username: str, password: str, display_name: str, person_id: int | None = None) -> SysUser:
+def create_user(
+    db: Session, username: str, password: str, display_name: str,
+    person_id: int | None = None, *, is_superuser: bool = False,
+) -> SysUser:
+    if db.scalar(select(SysUser.id).where(SysUser.username == username)) is not None:
+        raise StateConflictError(message="账号名已存在")
     if person_id is not None:
         person = db.get(Person, person_id)
         if person is None:
@@ -67,9 +80,16 @@ def create_user(db: Session, username: str, password: str, display_name: str, pe
         password_hash=hash_password(password),
         display_name=display_name,
         person_id=person_id,
+        is_superuser=is_superuser,
     )
-    db.add(user)
-    db.flush()
+    try:
+        with db.begin_nested():
+            db.add(user)
+            db.flush()
+    except IntegrityError as exc:
+        # Keep the outer request transaction usable and also cover a concurrent
+        # insert racing with the explicit uniqueness check above.
+        raise StateConflictError(message="账号名或绑定人员已存在") from exc
     return user
 
 
@@ -79,16 +99,21 @@ def issue_tokens(settings: Settings, user: SysUser) -> tuple[str, str]:
     return access, refresh
 
 
-def refresh_access_token(settings: Settings, token: str) -> tuple[str, str]:
+def refresh_access_token(db: Session, settings: Settings, token: str) -> tuple[str, str]:
     payload = decode_token(settings, token)
     if payload.get("type") != "refresh":
         raise UnauthorizedError(message="仅支持 refresh token 刷新")
     user_id_str = payload.get("sub")
     if not user_id_str:
         raise UnauthorizedError()
+    user = db.get(SysUser, int(user_id_str))
+    if user is None:
+        raise UnauthorizedError(message="用户不存在或已注销")
+    if user.status != "enabled":
+        raise UnauthorizedError(message="账号已停用")
     return (
-        create_access_token(settings, int(user_id_str), payload.get("username", "")),
-        create_refresh_token(settings, int(user_id_str), payload.get("username", "")),
+        create_access_token(settings, user.id, user.username),
+        create_refresh_token(settings, user.id, user.username),
     )
 
 
@@ -101,89 +126,41 @@ def change_own_password(db: Session, user: SysUser, old_password: str, new_passw
     db.flush()
 
 
-def reset_user_password(db: Session, user_id: int, new_password: str) -> None:
+def reset_user_password(
+    db: Session, user_id: int, new_password: str, actor: SysUser | None = None,
+) -> None:
     user = db.get(SysUser, user_id)
     if user is None:
         raise NotFoundError(message="用户不存在或已注销")
+    if user.is_superuser and actor is not None and not actor.is_superuser:
+        raise ForbiddenError(message="普通管理员不能修改超级管理员")
     user.password_hash = hash_password(new_password)
     db.flush()
 
 
 def check_user_permission(db: Session, user: SysUser, permission_code: str) -> bool:
-    stmt = (
-        exists()
-        .where(
-            SysPermission.code == permission_code,
-            SysPermission.id == sys_role_permission.c.permission_id,
-            sys_role_permission.c.role_id == sys_user_role.c.role_id,
-            sys_user_role.c.user_id == user.id,
-        )
+    if user.is_superuser:
+        return True
+    direct = exists().where(
+        SysPermission.code == permission_code,
+        SysPermission.status == "enabled",
+        SysPermission.id == sys_user_permission.c.permission_id,
+        sys_user_permission.c.user_id == user.id,
     )
-    return db.scalar(select(stmt)) or False
+    through_role = exists().where(
+        SysPermission.code == permission_code,
+        SysPermission.status == "enabled",
+        SysPermission.id == sys_role_permission.c.permission_id,
+        sys_role_permission.c.role_id == sys_user_role.c.role_id,
+        sys_user_role.c.user_id == user.id,
+        SysRole.id == sys_user_role.c.role_id,
+        SysRole.status == "enabled",
+    )
+    return bool(db.scalar(select(direct | through_role)))
 
 
-@dataclass(frozen=True)
-class DataScope:
-    scope_type: str
-    org_unit_id: int | None = None
-
-
-def resolve_user_data_scopes(db: Session, user: SysUser) -> list[DataScope]:
-    role_ids = db.scalars(
-        select(sys_user_role.c.role_id).where(sys_user_role.c.user_id == user.id)
-    ).all()
-
-    # Data scope is fixed by assigned canonical roles.  Legacy per-user rows
-    # must not widen a user's access. Retain persisted scope behavior only for
-    # users still on a pre-matrix role; the API cannot assign those roles.
-    role_codes = set(db.scalars(select(SysRole.code).where(SysRole.id.in_(role_ids))).all()) if role_ids else set()
-    if role_codes & CANONICAL_ROLE_CODES:
-        stmt = select(SysDataScope).where(SysDataScope.role_id.in_(role_ids))
-    else:
-        stmt = select(SysDataScope).where(
-            (SysDataScope.user_id == user.id)
-            | (SysDataScope.role_id.in_(role_ids) if role_ids else False)
-        )
-
-    seen: set[tuple[str, int | None]] = set()
-    result: list[DataScope] = []
-    for scope in db.scalars(stmt):
-        key = (scope.scope_type, scope.org_unit_id)
-        if key not in seen:
-            seen.add(key)
-            result.append(DataScope(scope.scope_type, scope.org_unit_id))
-
-    return result
-
-
-def has_global_scope(scopes: list[DataScope]) -> bool:
-    return any(s.scope_type == "all" for s in scopes)
-
-
-def resolve_scoped_org_unit_ids(db: Session, user: SysUser) -> set[int] | None:
-    """计算用户数据范围可见的 org_unit id 集合。
-
-    返回 None 表示全局范围（不过滤）。
-    返回空集合表示无任何可见组织。
-    self 范围按用户绑定人员所属机房处理。
-    """
-    scopes = resolve_user_data_scopes(db, user)
-    if has_global_scope(scopes):
-        return None
-
-    root_ids: set[int] = set()
-    for scope in scopes:
-        if scope.scope_type == "room" and scope.org_unit_id is not None:
-            root_ids.add(scope.org_unit_id)
-        elif scope.scope_type == "self":
-            if user.person_id is not None:
-                person = db.get(Person, user.person_id)
-                if person is not None and person.org_unit_id is not None:
-                    root_ids.add(person.org_unit_id)
-
-    if not root_ids:
-        return set()
-    return root_ids
+def is_room_switching_account(user: SysUser) -> bool:
+    return user.is_superuser or any(role.code == "system_admin" and role.status == "enabled" for role in user.roles)
 
 
 def list_users(db: Session) -> list[SysUser]:
@@ -200,10 +177,13 @@ def update_user(
     status: str | None,
     person_id: int | None = None,
     update_person: bool = False,
+    actor: SysUser | None = None,
 ) -> SysUser:
     user = db.get(SysUser, user_id)
     if user is None:
         raise NotFoundError(message="用户不存在")
+    if user.is_superuser and actor is not None and not actor.is_superuser:
+        raise ForbiddenError(message="普通管理员不能修改超级管理员")
     if display_name is not None:
         user.display_name = display_name
     if status is not None:
@@ -222,59 +202,130 @@ def update_user(
     return user
 
 
-def assign_user_roles(db: Session, user_id: int, role_ids: list[int]) -> SysUser:
+def assign_user_roles(db: Session, user_id: int, role_ids: list[int], actor: SysUser | None = None) -> SysUser:
     user = db.get(SysUser, user_id)
     if user is None:
         raise NotFoundError(message="用户不存在")
+    if user.is_superuser and actor is not None and not actor.is_superuser:
+        raise ForbiddenError(message="普通管理员不能修改超级管理员")
     roles = db.scalars(select(SysRole).where(SysRole.id.in_(role_ids))).all() if role_ids else []
     if len(roles) != len(role_ids):
         raise NotFoundError(message="角色不存在")
-    if any(role.code not in CANONICAL_ROLE_CODES for role in roles):
-        raise BusinessRuleError(message="只能分配预置角色")
+    if any(role.status != "enabled" for role in roles):
+        raise BusinessRuleError(message="不能分配已停用角色")
     user.roles = roles  # type: ignore[assignment]
     db.flush()
     return user
 
 
 def list_roles(db: Session) -> list[SysRole]:
-    return list(db.scalars(select(SysRole).where(SysRole.code.in_(CANONICAL_ROLE_CODES)).order_by(SysRole.id)).all())
+    return list(db.scalars(select(SysRole).order_by(SysRole.id)).all())
+
+
+def create_role(db: Session, code: str, name: str, remark: str | None = None) -> SysRole:
+    if db.scalar(select(SysRole.id).where(SysRole.code == code)) is not None:
+        raise StateConflictError(message="角色编码已存在")
+    role = SysRole(code=code, name=name, remark=remark)
+    db.add(role)
+    db.flush()
+    return role
+
+
+def update_role(
+    db: Session, role_id: int, name: str | None, remark: str | None,
+    status: str | None, update_remark: bool = False,
+) -> SysRole:
+    role = db.get(SysRole, role_id)
+    if role is None:
+        raise NotFoundError(message="角色不存在")
+    if name is not None:
+        role.name = name
+    if update_remark:
+        role.remark = remark
+    if status is not None:
+        role.status = status
+    db.flush()
+    return role
+
+
+def assign_role_permissions(db: Session, role_id: int, permission_ids: list[int]) -> SysRole:
+    role = db.get(SysRole, role_id)
+    if role is None:
+        raise NotFoundError(message="角色不存在")
+    permissions = db.scalars(select(SysPermission).where(SysPermission.id.in_(permission_ids))).all() if permission_ids else []
+    if len(permissions) != len(set(permission_ids)):
+        raise NotFoundError(message="权限不存在")
+    role.permissions = permissions  # type: ignore[assignment]
+    db.flush()
+    return role
 
 
 def list_permissions(db: Session) -> list[SysPermission]:
     return list(db.scalars(select(SysPermission).order_by(SysPermission.id)).all())
 
 
-def seed_role_matrix(db: Session) -> None:
-    """Create and repair the immutable role, grant, and scope records."""
+def seed_permission_system(db: Session) -> None:
+    """Register code-owned permissions and create missing common roles.
+
+    Existing role grants are intentionally not overwritten: system administrator
+    receives all permissions only at creation time, so later permissions are not
+    granted automatically.
+    """
     permissions = {p.code: p for p in db.scalars(select(SysPermission)).all()}
-    for code in canonical_permissions(ROLE_MATRIX[-1]):
-        if code not in permissions:
-            permissions[code] = SysPermission(code=code, name=code, type="api")
-            db.add(permissions[code])
+    for definition in PERMISSIONS:
+        permission = permissions.get(definition.code)
+        if permission is None:
+            permission = SysPermission(
+                code=definition.code, name=definition.name, type="api",
+                group_code=definition.group_code, group_name=definition.group_name,
+            )
+            permissions[definition.code] = permission
+            db.add(permission)
+        else:
+            permission.name = definition.name
+            permission.group_code = definition.group_code
+            permission.group_name = definition.group_name
     db.flush()
-    for definition in ROLE_MATRIX:
-        role = db.scalar(select(SysRole).where(SysRole.code == definition.code))
+    for code, (name, permission_codes) in BUILTIN_ROLES.items():
+        role = db.scalar(select(SysRole).where(SysRole.code == code))
         if role is None:
-            role = SysRole(code=definition.code, name=definition.name, remark="系统预置角色")
+            role = SysRole(code=code, name=name, remark="系统内置常用角色", is_builtin=True)
+            role.permissions = [permissions[item] for item in permission_codes]
             db.add(role)
-            db.flush()
-        role.name = definition.name
-        role.status = "enabled"
-        role.permissions = [permissions[code] for code in canonical_permissions(definition)]
-        scopes = db.scalars(select(SysDataScope).where(SysDataScope.role_id == role.id)).all()
-        for scope in scopes:
-            db.delete(scope)
-        db.add(SysDataScope(role_id=role.id, scope_type=definition.scope_type))
     db.flush()
 
 
-def list_org_units(db: Session, org_unit_ids: set[int] | None = None) -> list[OrgUnit]:
-    stmt = select(OrgUnit)
-    if org_unit_ids is not None:
-        if not org_unit_ids:
-            return []
-        stmt = stmt.where(OrgUnit.id.in_(org_unit_ids))
-    stmt = stmt.order_by(OrgUnit.sort_order, OrgUnit.id)
+def assign_user_permissions(db: Session, user_id: int, permission_ids: list[int], actor: SysUser | None = None) -> SysUser:
+    user = db.get(SysUser, user_id)
+    if user is None:
+        raise NotFoundError(message="用户不存在")
+    if user.is_superuser and actor is not None and not actor.is_superuser:
+        raise ForbiddenError(message="普通管理员不能修改超级管理员")
+    permissions = db.scalars(select(SysPermission).where(SysPermission.id.in_(permission_ids))).all() if permission_ids else []
+    if len(permissions) != len(set(permission_ids)):
+        raise NotFoundError(message="权限不存在")
+    user.direct_permissions = permissions  # type: ignore[assignment]
+    db.flush()
+    return user
+
+
+def effective_permission_sources(db: Session, user: SysUser) -> dict[str, list[str]]:
+    if user.is_superuser:
+        return {permission.code: ["superuser"] for permission in list_permissions(db)}
+    sources: dict[str, list[str]] = {}
+    for role in user.roles:
+        if role.status == "enabled":
+            for permission in role.permissions:
+                if permission.status == "enabled":
+                    sources.setdefault(permission.code, []).append(f"role:{role.code}")
+    for permission in user.direct_permissions:
+        if permission.status == "enabled":
+            sources.setdefault(permission.code, []).append("direct")
+    return sources
+
+
+def list_org_units(db: Session) -> list[OrgUnit]:
+    stmt = select(OrgUnit).order_by(OrgUnit.sort_order, OrgUnit.id)
     return list(db.scalars(stmt).all())
 
 
@@ -386,6 +437,11 @@ def create_person(
     participate_schedule: bool = False,
     remark: str | None = None,
 ) -> Person:
+    allowed_types = {"duty_operator", "maintenance", "room_director", "deputy_director"}
+    if person_type not in allowed_types:
+        raise BusinessRuleError(message="人员类型不合法")
+    if person_type != "duty_operator" and participate_schedule:
+        raise BusinessRuleError(message="只有值机员可以参与排班")
     code = code or _generate_unique_code(db, Person, "person")
     existing = db.scalars(select(Person).where(Person.code == code)).first()
     if existing:
@@ -407,6 +463,7 @@ def update_person(
     db: Session, person_id: int,
     org_unit_id: int | None = None,
     name: str | None = None,
+    person_type: str | None = None,
     phone: str | None = None,
     participate_schedule: bool | None = None,
     status: str | None = None,
@@ -421,9 +478,18 @@ def update_person(
         p.org_unit_id = org_unit_id
     if name is not None:
         p.name = name
+    if person_type is not None:
+        allowed_types = {"duty_operator", "maintenance", "room_director", "deputy_director"}
+        if person_type not in allowed_types:
+            raise BusinessRuleError(message="人员类型不合法")
+        p.person_type = person_type
+        if person_type != "duty_operator":
+            p.participate_schedule = False
     if phone is not None:
         p.phone = phone
     if participate_schedule is not None:
+        if participate_schedule and p.person_type != "duty_operator":
+            raise BusinessRuleError(message="只有值机员可以参与排班")
         p.participate_schedule = participate_schedule
     if status is not None:
         p.status = status

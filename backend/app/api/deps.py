@@ -1,6 +1,7 @@
 from typing import Annotated
 
 from fastapi import Depends, Query, Request
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -11,7 +12,7 @@ from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.user import SysUser
 from app.schemas.pagination import PageParams
-from app.services.auth import check_user_permission, has_global_scope, resolve_user_data_scopes
+from app.services.auth import check_user_permission, is_room_switching_account
 
 
 def _get_settings(request: Request) -> Settings:
@@ -34,6 +35,14 @@ class RequirePermission:
         return user
 
 
+def get_authenticated_user(
+    request: Request,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(_get_settings),
+) -> SysUser:
+    return get_current_user(settings, request, db)
+
+
 def get_page_params(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=200)] = 20,
@@ -43,8 +52,7 @@ def get_page_params(
 
 def resolve_current_room_id(request: Request, db: Session, user: SysUser) -> int:
     """Return the room selected by an administrator or bound to a normal user."""
-    scopes = resolve_user_data_scopes(db, user)
-    if has_global_scope(scopes):
+    if is_room_switching_account(user):
         header_value = request.headers.get("X-Current-Room-Id")
         if not header_value:
             raise CurrentRoomRequiredError()
@@ -53,11 +61,20 @@ def resolve_current_room_id(request: Request, db: Session, user: SysUser) -> int
         except ValueError as exc:
             raise BusinessRuleError(message="当前机房不合法") from exc
         room = db.get(OrgUnit, room_id)
-        if room is None or room.type != "room":
+        if room is None or room.type != "room" or room.status != "enabled":
             raise BusinessRuleError(message="当前机房不合法")
         return room_id
 
-    person = db.get(Person, user.person_id) if user.person_id is not None else None
-    if person is None or person.org_unit_id is None:
-        raise BusinessRuleError(message="当前账号未绑定所属机房的人员")
-    return person.org_unit_id
+    room_id = db.scalar(
+        select(Person.org_unit_id)
+        .join(OrgUnit, OrgUnit.id == Person.org_unit_id)
+        .where(
+            Person.id == user.person_id,
+            Person.status == "enabled",
+            OrgUnit.type == "room",
+            OrgUnit.status == "enabled",
+        )
+    )
+    if room_id is None:
+        raise BusinessRuleError(message="当前账号未绑定所属机房的有效人员")
+    return int(room_id)

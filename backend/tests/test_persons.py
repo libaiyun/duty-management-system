@@ -1,11 +1,10 @@
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import select
-
 from app.models.organization import OrgUnit
 from app.models.person import Person
-from app.models.user import SysDataScope, SysPermission, SysRole
+from app.models.user import SysPermission, SysRole
 from app.services.auth import create_user
+from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -22,14 +21,13 @@ def _create_admin(api_client: TestClient, db_session, select_room: bool = True) 
         room = OrgUnit(code="admin-current-room", name="管理员当前机房", type="room")
         db_session.add(room)
         db_session.flush()
-    user = create_user(db_session, "admin", "password123", "管理员")
+    user = create_user(db_session, "admin", "password123", "管理员", is_superuser=True)
     perm = SysPermission(code="person:manage:view", name="View Person", type="api")
     role = SysRole(code="admin-role", name="Admin")
     role.permissions.append(perm)
     db_session.add_all([perm, role])
     user.roles.append(role)
     db_session.flush()
-    db_session.add(SysDataScope(user_id=user.id, scope_type="all", org_unit_id=None))
     db_session.commit()
     token = _login(api_client, db_session, "admin", "password123")
     if select_room:
@@ -137,8 +135,32 @@ class TestPersonApi:
         assert data["name"] == "赵六(改)"
         assert data["status"] == "disabled"
 
+    def test_change_person_type_to_non_operator_clears_schedule_participation(
+        self, api_client: TestClient, db_session,
+    ) -> None:
+        _, token = _create_admin(api_client, db_session)
+        created = api_client.post(
+            "/api/v1/persons",
+            json={
+                "code": "P-TYPE", "name": "类型调整", "person_type": "duty_operator",
+                "participate_schedule": True,
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        person_id = created.json()["data"]["id"]
+
+        resp = api_client.put(
+            f"/api/v1/persons/{person_id}",
+            json={"person_type": "maintenance"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert resp.status_code == 200
+        assert resp.json()["data"]["person_type"] == "maintenance"
+        assert resp.json()["data"]["participate_schedule"] is False
+
     def test_persons_requires_permission(self, api_client: TestClient, db_session) -> None:
-        user = create_user(db_session, "worker", "pass", "普通用户")
+        create_user(db_session, "worker", "pass", "普通用户")
         db_session.commit()
         token = _login(api_client, db_session, "worker", "pass")
 
@@ -194,7 +216,6 @@ class TestPersonDataScope:
         db_session.add(role)
         scoped.roles.append(role)
         db_session.flush()
-        db_session.add(SysDataScope(user_id=scoped.id, scope_type="room", org_unit_id=room1.id))
         db_session.commit()
 
         token = _login(api_client, db_session, "scoped", "pass123")

@@ -7,7 +7,15 @@ from app.core.exceptions import BusinessRuleError, ForbiddenError, NotFoundError
 from app.models.approval import ApprovalTask
 from app.models.person import Person
 from app.models.schedule import ScheduleDay, ScheduleShift, ShiftSwap
-from app.models.user import SysRole, SysUser
+from app.models.user import (
+    SysPermission,
+    SysRole,
+    SysUser,
+    sys_role_permission,
+    sys_user_permission,
+    sys_user_role,
+)
+from app.schemas.shift_swap import ShiftSwapCreateRequest
 from app.services.approval import complete_task, create_task
 from app.services.schedule import update_schedule_shift_persons
 
@@ -48,9 +56,57 @@ def _snapshot(swap: ShiftSwap) -> dict[str, str | int | None]:
     }
 
 
-def create_swap(db: Session, payload, user: SysUser, room_id: int) -> ShiftSwap:
+def _find_approval_assignee(db: Session, room_id: int) -> SysUser | None:
+    """Find an enabled approver in one query, including global administrators."""
+    direct_permission = select(sys_user_permission.c.user_id).join(
+        SysPermission, SysPermission.id == sys_user_permission.c.permission_id,
+    ).where(
+        sys_user_permission.c.user_id == SysUser.id,
+        SysPermission.code == "approval:task:view_todo",
+        SysPermission.status == "enabled",
+    ).exists()
+    role_permission = select(sys_user_role.c.user_id).join(
+        SysRole, SysRole.id == sys_user_role.c.role_id,
+    ).join(
+        sys_role_permission, sys_role_permission.c.role_id == SysRole.id,
+    ).join(
+        SysPermission, SysPermission.id == sys_role_permission.c.permission_id,
+    ).where(
+        sys_user_role.c.user_id == SysUser.id,
+        SysRole.status == "enabled",
+        SysPermission.code == "approval:task:view_todo",
+        SysPermission.status == "enabled",
+    ).exists()
+    system_admin_role = select(sys_user_role.c.user_id).join(
+        SysRole, SysRole.id == sys_user_role.c.role_id,
+    ).where(
+        sys_user_role.c.user_id == SysUser.id,
+        SysRole.code == "system_admin",
+        SysRole.status == "enabled",
+    ).exists()
+    bound_to_room = select(Person.id).where(
+        Person.id == SysUser.person_id,
+        Person.org_unit_id == room_id,
+        Person.status == "enabled",
+    ).exists()
+    return db.scalar(select(SysUser).where(
+        SysUser.status == "enabled",
+        SysUser.is_superuser | direct_permission | role_permission,
+        SysUser.is_superuser | system_admin_role | bound_to_room,
+    ).order_by(SysUser.id).limit(1))
+
+
+def create_swap(db: Session, payload: ShiftSwapCreateRequest, user: SysUser, room_id: int) -> ShiftSwap:
     if user.person_id is None:
         raise ForbiddenError(message="当前账号未绑定人员")
+    applicant = db.get(Person, user.person_id)
+    if (
+        applicant is None or applicant.status != "enabled"
+        or applicant.org_unit_id != room_id
+        or applicant.person_type != "duty_operator"
+        or not applicant.participate_schedule
+    ):
+        raise ForbiddenError(message="只有当前机房启用且参与排班的值机员可以发起换班")
     source = _shift(db, payload.source_shift_id)
     if source.schedule_day.schedule.org_unit_id != room_id:
         raise ForbiddenError(message="仅能对当前机房的班次发起换班")
@@ -61,6 +117,8 @@ def create_swap(db: Session, payload, user: SysUser, room_id: int) -> ShiftSwap:
         raise BusinessRuleError(message="目标人员必须是同机房启用且参与排班的值机员，且不能为本人")
     target_shift = None
     if payload.swap_type == "mutual":
+        if payload.target_shift_id is None:
+            raise BusinessRuleError(message="互换班次必须选择对方班次")
         target_shift = _shift(db, payload.target_shift_id)
         if target_shift.id == source.id:
             raise BusinessRuleError(message="互换班次不能选择同一班次")
@@ -88,12 +146,17 @@ def create_swap(db: Session, payload, user: SysUser, room_id: int) -> ShiftSwap:
 
 def target_confirm(db: Session, swap_id: int, user: SysUser, *, approve: bool, opinion: str | None, room_id: int) -> ShiftSwap:
     swap = get_swap(db, swap_id)
+    source = _shift(db, swap.source_shift_id)
+    if source.schedule_day.schedule.org_unit_id != room_id:
+        raise ForbiddenError(message="仅能操作当前机房的换班")
     if swap.target_person_id != user.person_id:
         raise ForbiddenError(message="仅目标人员可确认换班")
     if swap.status != "wait_target_confirm":
         raise StateConflictError(message="当前换班单不能确认")
     if not approve and not (opinion or "").strip():
         raise BusinessRuleError(message="拒绝时必须填写意见")
+    if approve:
+        _assert_swap_not_historical(db, swap)
     task = db.scalar(select(ApprovalTask).where(ApprovalTask.biz_type == "shift_swap", ApprovalTask.biz_id == swap.id, ApprovalTask.node_code == "target_confirm", ApprovalTask.status == "pending"))
     if task is None:
         raise StateConflictError(message="确认待办不存在或已处理")
@@ -102,19 +165,9 @@ def target_confirm(db: Session, swap_id: int, user: SysUser, *, approve: bool, o
         swap.status = "rejected"
         swap.updated_by = user.id
         return swap
-    director = db.scalar(
-        select(SysUser)
-        .join(SysUser.roles)
-        .join(Person, SysUser.person_id == Person.id)
-        .where(
-            Person.org_unit_id == room_id,
-            SysUser.status == "enabled",
-            SysRole.code.in_(("room_director", "deputy_director")),
-        )
-        .order_by(SysUser.id)
-    )
+    director = _find_approval_assignee(db, room_id)
     if director is None:
-        raise BusinessRuleError(message="当前机房未配置主任或副主任账号")
+        raise BusinessRuleError(message="当前机房未配置审批管理员账号")
     swap.status = "wait_director_approval"
     swap.updated_by = user.id
     create_task(db, biz_type="shift_swap", biz_id=swap.id, node_code="director_approval", assignee_user_id=director.id, org_unit_id=room_id, snapshot=_snapshot(swap), created_by=user.id)
@@ -129,11 +182,14 @@ def director_decide(db: Session, swap_id: int, user: SysUser, *, approve: bool, 
         swap.status = "rejected"
         swap.updated_by = user.id
         return swap
+    _assert_swap_not_historical(db, swap)
     source = _shift(db, swap.source_shift_id)
     source_people = [person.person_id for person in source.persons]
     if swap.applicant_person_id not in source_people:
         raise BusinessRuleError(message="原班次最终排班人员不存在")
     if swap.swap_type == "mutual":
+        if swap.target_shift_id is None:
+            raise StateConflictError(message="互换班次缺少目标班次")
         target = _shift(db, swap.target_shift_id)
         target_people = [person.person_id for person in target.persons]
         if swap.target_person_id not in target_people:
@@ -160,17 +216,41 @@ def director_decide(db: Session, swap_id: int, user: SysUser, *, approve: bool, 
     return swap
 
 
-def withdraw_or_cancel(db: Session, swap_id: int, user: SysUser, *, cancel: bool = False) -> ShiftSwap:
+def _assert_swap_not_historical(db: Session, swap: ShiftSwap) -> None:
+    shift_ids = [swap.source_shift_id]
+    if swap.target_shift_id is not None:
+        shift_ids.append(swap.target_shift_id)
+    # Query the dates directly.  The approval flow can span days and the ORM
+    # relationship may already be loaded with yesterday's value in a long-lived
+    # transaction, while the authoritative boundary is the current database row.
+    duty_dates = db.scalars(
+        select(ScheduleDay.duty_date)
+        .join(ScheduleShift, ScheduleShift.schedule_day_id == ScheduleDay.id)
+        .where(ScheduleShift.id.in_(shift_ids))
+    ).all()
+    if len(duty_dates) != len(shift_ids):
+        raise NotFoundError(message="排班班次不存在")
+    if any(duty_date < datetime.now().date() for duty_date in duty_dates):
+        raise BusinessRuleError(message="历史班次不能确认或执行普通换班变更")
+
+
+def withdraw_or_cancel(
+    db: Session, swap_id: int, user: SysUser, *, cancel: bool = False, room_id: int | None = None,
+) -> ShiftSwap:
     swap = get_swap(db, swap_id)
+    source = _shift(db, swap.source_shift_id)
+    if room_id is not None and source.schedule_day.schedule.org_unit_id != room_id:
+        raise ForbiddenError(message="仅能操作当前机房的换班")
     if swap.applicant_person_id != user.person_id:
         raise ForbiddenError(message="仅申请人可操作换班单")
     allowed = ("approved", "effective") if cancel else OPEN_STATUSES
     if swap.status not in allowed:
         raise StateConflictError(message="当前换班单不能撤回或作废")
+    if cancel:
+        _assert_swap_not_historical(db, swap)
     swap.status = "cancelled" if cancel else "withdrawn"
     swap.updated_by = user.id
     if cancel:
-        source = _shift(db, swap.source_shift_id)
         update_schedule_shift_persons(
             db, source.schedule_day.schedule, source,
             [swap.applicant_person_id if pid == swap.target_person_id else pid for pid in [p.person_id for p in source.persons]],

@@ -4,32 +4,39 @@ from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import RequirePermission, get_db, get_page_params, resolve_current_room_id
-from app.core.exceptions import BusinessRuleError, ForbiddenError, NotFoundError, StateConflictError
-from app.models.schedule import DutyChangeLedger, MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson, ShiftSwap
+from app.api.deps import RequirePermission, get_authenticated_user, get_db, get_page_params, resolve_current_room_id
+from app.core.exceptions import BusinessRuleError, ForbiddenError, NotFoundError
 from app.models.person import Person
+from app.models.schedule import (
+    DutyChangeLedger,
+    MonthlySchedule,
+    ScheduleDay,
+    ScheduleShift,
+    ScheduleShiftPerson,
+    ShiftSwap,
+)
 from app.models.shift import ShiftRule, ShiftRuleVersion
 from app.models.user import SysUser
 from app.schemas.pagination import PageParams, PageResponse
 from app.schemas.response import ApiResponse, ok
-from app.services.auth import check_user_permission
 from app.schemas.schedule import (
-    ScheduleDayResponse,
     DutyChangeLedgerResponse,
     HistoricalCorrectionRequest,
-    ScheduleResponse,
+    ScheduleDayResponse,
     SchedulePersonOptionResponse,
-    ScheduleShiftUpdateRequest,
+    ScheduleResponse,
     ScheduleShiftPersonResponse,
     ScheduleShiftResponse,
+    ScheduleShiftUpdateRequest,
 )
+from app.services.auth import check_user_permission
 from app.services.schedule import (
+    apply_historical_correction,
     generate_schedule_from_rule,
     get_legal_holidays,
     get_schedule_counts,
     get_schedule_days,
     get_schedule_days_by_range,
-    apply_historical_correction,
     list_schedules,
     update_schedule_shift_persons,
 )
@@ -69,7 +76,6 @@ def _build_schedule_response(
         status=schedule.status,
         generated_at=schedule.generated_at,
         published_at=schedule.published_at,
-        locked_at=schedule.locked_at,
         remark=schedule.remark,
         day_count=day_count,
         shift_count=shift_count,
@@ -187,8 +193,53 @@ def _get_scoped_schedule(db: Session, schedule_id: int, room_id: int) -> Monthly
 
 
 def _ensure_schedule_visible(db: Session, schedule: MonthlySchedule, user: SysUser) -> None:
-    if schedule.status != "published" and not check_user_permission(db, user, "schedule:monthly:generate"):
+    if check_user_permission(db, user, "schedule:monthly:view"):
+        if schedule.status != "published" and not check_user_permission(db, user, "schedule:monthly:generate"):
+            raise NotFoundError(message="排班记录不存在")
+        return
+    _personal_schedule_person_id(db, user)
+    if schedule.status != "published":
         raise NotFoundError(message="排班记录不存在")
+
+
+def _personal_schedule_person_id(db: Session, user: SysUser) -> int:
+    person = db.get(Person, user.person_id) if user.person_id is not None else None
+    if person is None or person.status != "enabled" or person.org_unit_id is None:
+        raise ForbiddenError(message="当前账号未绑定有效人员，不能查看个人排班")
+    return person.id
+
+
+def _resolve_schedule_room_id(request: Request, db: Session, user: SysUser) -> int:
+    if not check_user_permission(db, user, "schedule:monthly:view"):
+        _personal_schedule_person_id(db, user)
+    return resolve_current_room_id(request, db, user)
+
+
+def _build_visible_day_responses(
+    db: Session, days: list[ScheduleDay], holidays: dict[date, str],
+    pending_summaries: dict[int, str], effective_summaries: dict[int, str], user: SysUser,
+) -> list[ScheduleDayResponse]:
+    person_id = None if check_user_permission(db, user, "schedule:monthly:view") else _personal_schedule_person_id(db, user)
+    responses: list[ScheduleDayResponse] = []
+    for day in days:
+        visible_shifts = [
+            shift for shift in day.shifts
+            if person_id is None or any(item.person_id == person_id for item in shift.persons)
+        ]
+        if person_id is not None and not visible_shifts:
+            continue
+        responses.append(ScheduleDayResponse(
+            id=day.id, duty_date=day.duty_date, weekday=day.weekday,
+            is_legal_holiday=day.duty_date in holidays,
+            holiday_name=holidays.get(day.duty_date),
+            shifts=[
+                _build_shift_response(
+                    shift, pending_summaries.get(shift.id), effective_summaries.get(shift.id),
+                )
+                for shift in visible_shifts
+            ],
+        ))
+    return responses
 
 
 @router.get("", response_model=ApiResponse[PageResponse[ScheduleResponse]])
@@ -198,11 +249,12 @@ def list_schedules_endpoint(
     org_unit_id: int | None = None,
     status: str | None = None,
     db: Session = Depends(get_db),
-    user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
+    user: SysUser = Depends(get_authenticated_user),
 ) -> ApiResponse[PageResponse[ScheduleResponse]]:
-    room_id = resolve_current_room_id(request, db, user)
+    can_view_room_schedule = check_user_permission(db, user, "schedule:monthly:view")
+    room_id = _resolve_schedule_room_id(request, db, user)
     visible_status = status
-    if not check_user_permission(db, user, "schedule:monthly:generate"):
+    if not can_view_room_schedule or not check_user_permission(db, user, "schedule:monthly:generate"):
         visible_status = "published"
     schedules, total = list_schedules(
         db,
@@ -227,11 +279,20 @@ def list_change_ledger_endpoint(
         raise BusinessRuleError(message="起始日期不能晚于结束日期")
     room_id = resolve_current_room_id(request, db, user)
     stmt = select(DutyChangeLedger).join(ScheduleShift).join(ScheduleDay).join(MonthlySchedule).where(MonthlySchedule.org_unit_id == room_id)
-    if from_date: stmt = stmt.where(ScheduleDay.duty_date >= from_date)
-    if to_date: stmt = stmt.where(ScheduleDay.duty_date <= to_date)
-    if person_id: stmt = stmt.where((DutyChangeLedger.original_person_id == person_id) | (DutyChangeLedger.before_person_id == person_id) | (DutyChangeLedger.after_person_id == person_id))
-    if shift_def_id: stmt = stmt.where(ScheduleShift.shift_def_id == shift_def_id)
-    if change_type: stmt = stmt.where(DutyChangeLedger.change_type == change_type)
+    if from_date:
+        stmt = stmt.where(ScheduleDay.duty_date >= from_date)
+    if to_date:
+        stmt = stmt.where(ScheduleDay.duty_date <= to_date)
+    if person_id:
+        stmt = stmt.where(
+            (DutyChangeLedger.original_person_id == person_id)
+            | (DutyChangeLedger.before_person_id == person_id)
+            | (DutyChangeLedger.after_person_id == person_id)
+        )
+    if shift_def_id:
+        stmt = stmt.where(ScheduleShift.shift_def_id == shift_def_id)
+    if change_type:
+        stmt = stmt.where(DutyChangeLedger.change_type == change_type)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = list(db.scalars(stmt.options(
         selectinload(DutyChangeLedger.original_person), selectinload(DutyChangeLedger.before_person), selectinload(DutyChangeLedger.after_person),
@@ -251,9 +312,9 @@ def get_schedule_endpoint(
     id: int,
     request: Request,
     db: Session = Depends(get_db),
-    user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
+    user: SysUser = Depends(get_authenticated_user),
 ) -> ApiResponse[ScheduleResponse]:
-    schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
+    schedule = _get_scoped_schedule(db, id, _resolve_schedule_room_id(request, db, user))
     _ensure_schedule_visible(db, schedule, user)
     return ok(_build_schedule_response(schedule, get_schedule_counts(db, [schedule.id]).get(schedule.id)))
 
@@ -265,9 +326,9 @@ def get_schedule_days_endpoint(
     year: int | None = None,
     month: int | None = None,
     db: Session = Depends(get_db),
-    user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
+    user: SysUser = Depends(get_authenticated_user),
 ) -> ApiResponse[list[ScheduleDayResponse]]:
-    schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
+    schedule = _get_scoped_schedule(db, id, _resolve_schedule_room_id(request, db, user))
     _ensure_schedule_visible(db, schedule, user)
     if (year is None) != (month is None):
         raise BusinessRuleError(message="year 和 month 必须同时传入")
@@ -279,7 +340,9 @@ def get_schedule_days_endpoint(
     holidays = get_legal_holidays(db, [day.duty_date for day in days])
     pending_summaries = _get_pending_swap_summaries(db, days)
     effective_summaries = _get_effective_change_summaries(db, days)
-    return ok([_build_day_response(day, holidays, pending_summaries, effective_summaries) for day in days])
+    return ok(_build_visible_day_responses(
+        db, days, holidays, pending_summaries, effective_summaries, user,
+    ))
 
 
 @router.get("/{id}/days/range", response_model=ApiResponse[list[ScheduleDayResponse]])
@@ -289,9 +352,9 @@ def get_schedule_days_range_endpoint(
     from_date: date = Query(..., alias="from"),
     to_date: date = Query(..., alias="to"),
     db: Session = Depends(get_db),
-    user: SysUser = Depends(RequirePermission("schedule:monthly:view")),
+    user: SysUser = Depends(get_authenticated_user),
 ) -> ApiResponse[list[ScheduleDayResponse]]:
-    schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
+    schedule = _get_scoped_schedule(db, id, _resolve_schedule_room_id(request, db, user))
     _ensure_schedule_visible(db, schedule, user)
     if from_date > to_date:
         raise BusinessRuleError(message="起始日期不能晚于结束日期")
@@ -301,7 +364,9 @@ def get_schedule_days_range_endpoint(
     holidays = get_legal_holidays(db, [day.duty_date for day in days])
     pending_summaries = _get_pending_swap_summaries(db, days)
     effective_summaries = _get_effective_change_summaries(db, days)
-    return ok([_build_day_response(day, holidays, pending_summaries, effective_summaries) for day in days])
+    return ok(_build_visible_day_responses(
+        db, days, holidays, pending_summaries, effective_summaries, user,
+    ))
 
 
 @router.post("/{id}/generate", response_model=ApiResponse[ScheduleResponse])
@@ -344,10 +409,6 @@ def update_schedule_shift_endpoint(
     ))
     if shift is None:
         raise NotFoundError(message="排班班次不存在")
-    if "system_admin" in {role.code for role in user.roles} and (
-        user.person_id is None or user.person_id not in {person.person_id for person in shift.persons}
-    ):
-        raise ForbiddenError(message="系统管理员仅可编辑本人班次")
     duty_date = db.scalar(select(ScheduleDay.duty_date).where(ScheduleDay.id == shift.schedule_day_id))
     if duty_date is not None and duty_date < date.today():
         raise BusinessRuleError(message="历史班次仅可通过历史修正调整")
@@ -360,10 +421,8 @@ def update_schedule_shift_endpoint(
 @router.post("/{id}/shifts/{shift_id}/history-corrections", response_model=ApiResponse[ScheduleShiftResponse])
 def historical_correction_endpoint(
     id: int, shift_id: int, payload: HistoricalCorrectionRequest, request: Request,
-    db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("schedule:monthly:generate")),
+    db: Session = Depends(get_db), user: SysUser = Depends(RequirePermission("schedule:history:correct")),
 ) -> ApiResponse[ScheduleShiftResponse]:
-    if not {role.code for role in user.roles} & {"room_director", "deputy_director"}:
-        raise ForbiddenError(message="仅机房主任或副主任可执行历史修正")
     schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
     shift = db.scalar(select(ScheduleShift).join(ScheduleDay).where(ScheduleShift.id == shift_id, ScheduleDay.schedule_id == schedule.id).options(selectinload(ScheduleShift.schedule_day)))
     if shift is None:
@@ -395,10 +454,8 @@ def publish_schedule_endpoint(
     user: SysUser = Depends(RequirePermission("schedule:monthly:generate")),
 ) -> ApiResponse[ScheduleResponse]:
     schedule = _get_scoped_schedule(db, id, resolve_current_room_id(request, db, user))
-    if schedule.status == "locked":
-        raise StateConflictError(message="已锁定排班不能发布")
     schedule.status = "published"
-    from datetime import datetime, UTC
+    from datetime import UTC, datetime
     schedule.published_at = datetime.now(UTC)
     db.commit()
     db.refresh(schedule)

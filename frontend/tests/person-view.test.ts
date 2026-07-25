@@ -1,6 +1,7 @@
 import { mount } from '@vue/test-utils'
 import ElementPlus from 'element-plus'
 import { createPinia, setActivePinia } from 'pinia'
+import { nextTick } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { router as appRouter } from '@/router'
@@ -95,6 +96,29 @@ describe('PersonView', () => {
       participate_schedule: true,
       remark: null,
     })
+  })
+
+  it('sends the edited personnel type', async () => {
+    const vm = wrapper.vm as unknown as {
+      openEditDialog: (person: Record<string, unknown>) => void
+      formData: Record<string, unknown>
+      save: () => Promise<void>
+    }
+    vm.openEditDialog({
+      id: 1, org_unit_id: 1, code: 'P001', name: '张三', person_type: 'duty_operator',
+      phone: null, participate_schedule: true, status: 'enabled', remark: null,
+      account_bound: false, account_username: null,
+    })
+    await nextTick()
+    vm.formData.person_type = 'maintenance'
+    vm.formData.participate_schedule = false
+
+    await vm.save()
+
+    expect(httpClient.put).toHaveBeenCalledWith('/persons/1', expect.objectContaining({
+      person_type: 'maintenance',
+      participate_schedule: false,
+    }))
   })
 
   it('has correct data columns in table', () => {

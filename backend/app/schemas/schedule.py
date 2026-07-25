@@ -14,7 +14,6 @@ class ScheduleResponse(BaseModel):
     status: str
     generated_at: datetime | None = None
     published_at: datetime | None = None
-    locked_at: datetime | None = None
     remark: str | None = None
     day_count: int = 0
     shift_count: int = 0

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -10,7 +12,7 @@ class RoleCreateRequest(BaseModel):
 class RoleUpdateRequest(BaseModel):
     name: str | None = Field(None, min_length=1, max_length=128)
     remark: str | None = None
-    status: str | None = None
+    status: Literal["enabled", "disabled"] | None = None
 
 
 class RolePermissionAssignRequest(BaseModel):
@@ -23,9 +25,11 @@ class RoleResponse(BaseModel):
     name: str
     remark: str | None = None
     status: str
+    is_builtin: bool = False
 
     model_config = {"from_attributes": True}
 
 
 class RoleDetailResponse(RoleResponse):
     permission_ids: list[int] = Field(default_factory=list)
+    user_ids: list[int] = Field(default_factory=list)

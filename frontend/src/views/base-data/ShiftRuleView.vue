@@ -1,7 +1,7 @@
 <template>
   <section class="shift-rule-view">
     <h1>排班规则</h1>
-    <div class="shift-rule-view__toolbar"><el-button type="primary" @click="openDialog()">新增规则</el-button></div>
+    <div class="shift-rule-view__toolbar"><el-button v-if="canManage" type="primary" @click="openDialog()">新增规则</el-button></div>
     <el-table :data="shiftRules" v-loading="loading" stripe>
       <el-table-column prop="code" label="规则编码" width="150" />
       <el-table-column prop="name" label="规则名称" min-width="180" />
@@ -11,7 +11,7 @@
       <el-table-column label="状态" width="90" align="center">
         <template #default="{ row }"><el-tag :type="STATUS_TAG[row.status] || 'info'" size="small">{{ STATUS_LABELS[row.status] || row.status }}</el-tag></template>
       </el-table-column>
-      <el-table-column label="操作" width="320" fixed="right">
+      <el-table-column v-if="canManage" class-name="shift-rule-view__actions" label="操作" width="320" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openDialog(row)">编辑</el-button>
           <el-button v-if="row.latest_version_status === 'draft'" size="small" type="success" :loading="publishingId === row.id" @click="publish(row)">{{ row.status === 'published' ? '重新发布' : '发布' }}</el-button>
@@ -52,6 +52,8 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 
 import { httpClient, resolveErrorMessage } from '@/services/http'
 import { useRoomContextStore } from '@/stores/room-context'
+import { usePermissionStore } from '@/stores/permission'
+import { PERMISSION_CODES } from '@/types/permission'
 
 interface ShiftDefItem { id: number; code: string; name: string; start_time: string; end_time: string; display_order: number; status: string }
 interface ShiftRuleItem { id: number; day_no: number; cell_persons: Record<string, number[]> }
@@ -62,6 +64,8 @@ const STATUS_LABELS: Record<string, string> = { draft: '草稿', published: '已
 const STATUS_TAG: Record<string, string> = { draft: 'info', published: 'success', superseded: 'warning' }
 const shiftRules = ref<ShiftRuleData[]>([])
 const roomContextStore = useRoomContextStore()
+const permissionStore = usePermissionStore()
+const canManage = computed(() => permissionStore.hasPermission(PERMISSION_CODES.SHIFT_RULE_MANAGE))
 const shiftDefs = ref<ShiftDefItem[]>([])
 const persons = ref<PersonItem[]>([])
 const loading = ref(false)

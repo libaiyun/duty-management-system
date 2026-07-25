@@ -7,6 +7,8 @@ import { router as appRouter } from '@/router'
 import { httpClient } from '@/services/http'
 import { useAuthStore } from '@/stores/auth'
 import { useRoomContextStore } from '@/stores/room-context'
+import { usePermissionStore } from '@/stores/permission'
+import { PERMISSION_CODES } from '@/types/permission'
 
 import ShiftRuleView from '@/views/base-data/ShiftRuleView.vue'
 import ShiftDefView from '@/views/base-data/ShiftDefView.vue'
@@ -25,9 +27,16 @@ vi.mock('@/services/http', () => ({
   },
 }))
 
-async function mountView(component: typeof ShiftRuleView | typeof ShiftDefView) {
+async function mountView(component: typeof ShiftRuleView | typeof ShiftDefView, canManage = true) {
   const pinia = createPinia()
   setActivePinia(pinia)
+  if (canManage) {
+    usePermissionStore().setPermissions([
+      component === ShiftRuleView
+        ? PERMISSION_CODES.SHIFT_RULE_MANAGE
+        : PERMISSION_CODES.SHIFT_DEF_MANAGE,
+    ])
+  }
 
   const wrapper = mount(component, {
     global: {
@@ -68,6 +77,14 @@ describe('ShiftDefView', () => {
 
     await vi.waitFor(() => expect(httpClient.get).toHaveBeenCalledTimes(2))
     expect(httpClient.get).toHaveBeenLastCalledWith('/shifts')
+  })
+
+  it('hides maintenance actions from a read-only account', async () => {
+    wrapper.unmount()
+    wrapper = await mountView(ShiftDefView, false)
+
+    expect(wrapper.text()).not.toContain('新增班次')
+    expect(wrapper.find('.shift-def-view__actions').exists()).toBe(false)
   })
 })
 
@@ -140,6 +157,14 @@ describe('ShiftRuleView', () => {
     expect(httpClient.get).toHaveBeenCalledWith('/shift-rules')
     expect(httpClient.get).toHaveBeenCalledWith('/shifts')
     expect(httpClient.get).toHaveBeenCalledWith('/persons')
+  })
+
+  it('hides maintenance actions from a read-only account', async () => {
+    wrapper.unmount()
+    wrapper = await mountView(ShiftRuleView, false)
+
+    expect(wrapper.text()).not.toContain('新增规则')
+    expect(wrapper.find('.shift-rule-view__actions').exists()).toBe(false)
   })
 })
 

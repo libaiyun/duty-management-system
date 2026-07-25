@@ -1,7 +1,7 @@
 from alembic import command
 from alembic.config import Config
 from app.core.config import AppEnvironment, Settings
-from app.core.role_matrix import ROLE_MATRIX, canonical_permissions
+from app.core.permissions import BUILTIN_ROLES, PERMISSION_CODES
 from app.db.base import Base
 from app.db.session import create_db_engine
 from sqlalchemy import Integer, String, create_engine, inspect, select, text
@@ -92,7 +92,7 @@ def test_test_transaction_rolls_back_data(postgres_engine) -> None:
     assert rows == []
 
 
-def test_alembic_upgrade_head_creates_current_schema_and_role_matrix(
+def test_alembic_upgrade_head_creates_current_permission_schema(
     empty_postgres_database_url: str,
 ) -> None:
     alembic_config = Config("alembic.ini")
@@ -109,7 +109,7 @@ def test_alembic_upgrade_head_creates_current_schema_and_role_matrix(
         }
 
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "schedule_recalc_flag_m5"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "baseline_20260718"
 
             roles = {
                 code: role_id
@@ -117,12 +117,9 @@ def test_alembic_upgrade_head_creates_current_schema_and_role_matrix(
                     text("SELECT id, code FROM sys_role"),
                 ).all()
             }
-            assert set(roles) == {role.code for role in ROLE_MATRIX}
-
-            scopes = dict(connection.execute(text(
-                "SELECT role_id, scope_type FROM sys_data_scope",
-            )).all())
-            assert scopes == {roles[role.code]: role.scope_type for role in ROLE_MATRIX}
+            assert set(roles) == set(BUILTIN_ROLES)
+            assert "sys_data_scope" not in inspector.get_table_names()
+            assert "sys_user_permission" in inspector.get_table_names()
 
             grants = {
                 role_code: {permission_code for permission_code, in connection.execute(
@@ -136,9 +133,9 @@ def test_alembic_upgrade_head_creates_current_schema_and_role_matrix(
                 ).all()}
                 for role_code, role_id in roles.items()
             }
-            assert grants == {
-                role.code: set(canonical_permissions(role)) for role in ROLE_MATRIX
-            }
+            assert grants == {code: set(definition[1]) for code, definition in BUILTIN_ROLES.items()}
+            assert set(connection.scalars(text("SELECT code FROM sys_permission"))) == PERMISSION_CODES
+            assert connection.execute(text("SELECT is_superuser FROM sys_user WHERE username='superadmin'")).scalar_one() is True
     finally:
         engine.dispose()
 

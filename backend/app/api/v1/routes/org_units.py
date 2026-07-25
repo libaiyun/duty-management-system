@@ -16,7 +16,6 @@ from app.services.auth import (
     check_org_unit_referenced,
     create_org_unit,
     list_org_units,
-    resolve_scoped_org_unit_ids,
     update_org_unit,
 )
 
@@ -51,20 +50,18 @@ def _build_tree(units: list[OrgUnit], parent_id: int | None) -> list[OrgUnitTree
 @router.get("", response_model=ApiResponse[list[OrgUnitResponse]])
 def get_org_units(
     db: Session = Depends(get_db),
-    user: SysUser = Depends(RequirePermission("org:unit:view")),
+    _perm: SysUser = Depends(RequirePermission("org:unit:view")),
 ) -> ApiResponse[list[OrgUnitResponse]]:
-    scoped_ids = resolve_scoped_org_unit_ids(db, user)
-    units = list_org_units(db, org_unit_ids=scoped_ids)
+    units = list_org_units(db)
     return ok([OrgUnitResponse.model_validate(u) for u in units])
 
 
 @router.get("/tree", response_model=ApiResponse[list[OrgUnitTreeNode]])
 def get_org_tree(
     db: Session = Depends(get_db),
-    user: SysUser = Depends(RequirePermission("org:unit:view")),
+    _perm: SysUser = Depends(RequirePermission("org:unit:view")),
 ) -> ApiResponse[list[OrgUnitTreeNode]]:
-    scoped_ids = resolve_scoped_org_unit_ids(db, user)
-    units = list_org_units(db, org_unit_ids=scoped_ids)
+    units = list_org_units(db)
     return ok(_build_tree(units, None))
 
 

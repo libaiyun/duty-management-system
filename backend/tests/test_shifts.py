@@ -1,12 +1,11 @@
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import select
-
-from app.models.shift import ShiftDef
 from app.models.organization import OrgUnit
 from app.models.person import Person
-from app.models.user import SysDataScope, SysPermission, SysRole
+from app.models.shift import ShiftDef
+from app.models.user import SysPermission, SysRole, SysUser
 from app.services.auth import create_user
+from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -48,7 +47,8 @@ class TestShiftDefApi:
         role = SysRole(code="global-role", name="Global")
         role.permissions.append(permission)
         user.roles.append(role)
-        db_session.add_all([permission, role, SysDataScope(user_id=user.id, scope_type="all")])
+        user.is_superuser = True
+        db_session.add_all([permission, role])
         db_session.commit()
         token = _login(api_client, db_session, "global-admin", "password123")
 
@@ -96,7 +96,7 @@ class TestShiftDefApi:
         user_id, token = _create_admin(api_client, db_session)
         second_room = OrgUnit(code="room-2", name="第二机房", type="room")
         db_session.add(second_room)
-        db_session.add(SysDataScope(user_id=user_id, scope_type="all"))
+        db_session.get(SysUser, user_id).is_superuser = True
         db_session.commit()
 
         first_room_id = db_session.scalar(select(OrgUnit.id).where(OrgUnit.code == "room-1"))
@@ -265,7 +265,7 @@ class TestShiftDefApi:
         assert resp.status_code == 422
 
     def test_requires_permission(self, api_client: TestClient, db_session) -> None:
-        user = create_user(db_session, "worker", "pass", "普通用户")
+        create_user(db_session, "worker", "pass", "普通用户")
         db_session.commit()
         token = _login(api_client, db_session, "worker", "pass")
 

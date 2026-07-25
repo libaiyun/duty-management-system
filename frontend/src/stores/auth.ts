@@ -18,10 +18,13 @@ export const useAuthStore = defineStore('auth', {
     username: '',
     displayName: localStorage.getItem(USER_KEY) || '',
     personId: null as number | null,
+    personStatus: null as string | null,
+    personType: null as string | null,
+    participateSchedule: false,
+    isSuperuser: false,
     roomId: null as number | null,
     roomName: '',
     canSwitchRoom: false,
-    roleCodes: [] as string[],
   }),
 
   getters: {
@@ -46,10 +49,13 @@ export const useAuthStore = defineStore('auth', {
       this.username = user.username
       this.displayName = user.display_name
       this.personId = user.person_id
+      this.personStatus = user.person_status
+      this.personType = user.person_type
+      this.participateSchedule = user.participate_schedule
+      this.isSuperuser = user.is_superuser
       this.roomId = user.room_id
       this.roomName = user.room_name || ''
       this.canSwitchRoom = user.can_switch_room
-      this.roleCodes = user.role_codes
       localStorage.setItem(USER_KEY, user.display_name)
 
       const appStore = useAppStore()
@@ -83,10 +89,13 @@ export const useAuthStore = defineStore('auth', {
         this.username = user.username
         this.displayName = user.display_name
         this.personId = user.person_id
+        this.personStatus = user.person_status
+        this.personType = user.person_type
+        this.participateSchedule = user.participate_schedule
+        this.isSuperuser = user.is_superuser
         this.roomId = user.room_id
         this.roomName = user.room_name || ''
         this.canSwitchRoom = user.can_switch_room
-        this.roleCodes = user.role_codes
         localStorage.setItem(USER_KEY, user.display_name)
         appStore.userName = user.display_name
 
@@ -130,10 +139,13 @@ export const useAuthStore = defineStore('auth', {
       this.username = ''
       this.displayName = ''
       this.personId = null
+      this.personStatus = null
+      this.personType = null
+      this.participateSchedule = false
+      this.isSuperuser = false
       this.roomId = null
       this.roomName = ''
       this.canSwitchRoom = false
-      this.roleCodes = []
       localStorage.removeItem(TOKEN_KEY)
       localStorage.removeItem(REFRESH_TOKEN_KEY)
       localStorage.removeItem(USER_KEY)

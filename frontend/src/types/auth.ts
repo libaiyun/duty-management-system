@@ -15,8 +15,11 @@ export interface UserMeResponse {
   display_name: string
   status: string
   permissions: string[]
-  role_codes: string[]
   person_id: number | null
+  person_status: string | null
+  person_type: string | null
+  participate_schedule: boolean
+  is_superuser: boolean
   room_id: number | null
   room_name: string | null
   can_switch_room: boolean

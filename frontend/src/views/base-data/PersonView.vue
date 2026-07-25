@@ -121,7 +121,7 @@
           <el-input v-model="formData.phone" />
         </el-form-item>
         <el-form-item label="参与排班">
-          <el-switch v-model="formData.participate_schedule" />
+          <el-switch v-model="formData.participate_schedule" :disabled="formData.person_type !== 'duty_operator'" />
         </el-form-item>
         <el-form-item label="备注">
           <el-input v-model="formData.remark" type="textarea" :rows="3" />
@@ -167,11 +167,9 @@ interface PersonItem {
 
 const PERSON_TYPE_LABELS: Record<string, string> = {
   duty_operator: '值机员',
-  maintenance: '检修班人员',
-  director: '机房主任',
-  deputy: '机房副主任',
-  statistic: '财务/统计人员',
-  admin: '系统管理员',
+  maintenance: '检修班',
+  room_director: '机房主任',
+  deputy_director: '机房副主任',
 }
 
 function personTypeLabel(type: string): string {
@@ -245,6 +243,10 @@ watch(() => roomContextStore.currentRoomId, () => {
   void loadPersons()
 })
 
+watch(() => formData.person_type, (personType) => {
+  if (personType !== 'duty_operator') formData.participate_schedule = false
+})
+
 async function loadOrgUnits() {
   try {
     const resp = await httpClient.get<OrgUnitItem[]>('/org-units')
@@ -313,6 +315,7 @@ async function save() {
     if (editingPerson.value) {
       await httpClient.put(`/persons/${editingPerson.value.id}`, {
         name: formData.name,
+        person_type: formData.person_type,
         phone: formData.phone || null,
         participate_schedule: formData.participate_schedule,
         remark: formData.remark || null,

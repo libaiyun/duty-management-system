@@ -1,10 +1,6 @@
 from collections.abc import Generator
 
 import pytest
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.testclient import TestClient
-from pydantic import BaseModel
-
 from app.api.deps import get_page_params
 from app.core.config import Settings
 from app.core.exceptions import (
@@ -18,6 +14,9 @@ from app.core.exceptions import (
 from app.main import create_app
 from app.schemas.pagination import PageParams, PageResponse
 from app.schemas.response import ApiResponse, ok
+from fastapi import Depends, FastAPI, HTTPException
+from fastapi.testclient import TestClient
+from pydantic import BaseModel
 
 
 class Item(BaseModel):

@@ -25,7 +25,6 @@ class MonthlySchedule(BaseModel):
     )
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    locked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     remark: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     org_unit = relationship("OrgUnit", backref="monthly_schedules", foreign_keys=[org_unit_id])

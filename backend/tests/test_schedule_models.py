@@ -1,12 +1,11 @@
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
 import pytest
-from sqlalchemy.exc import IntegrityError
-
 from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.schedule import MonthlySchedule, ScheduleDay, ScheduleShift, ScheduleShiftPerson
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleVersion
+from sqlalchemy.exc import IntegrityError
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -79,7 +78,6 @@ class TestMonthlySchedule:
         assert ms.status == "draft"
         assert ms.generated_at is None
         assert ms.published_at is None
-        assert ms.locked_at is None
         assert ms.remark is None
         assert ms.version == 1
         assert ms.created_at is not None
@@ -127,7 +125,7 @@ class TestMonthlySchedule:
         org = _create_org(db_session)
         rule = _create_rule(db_session)
         rv = _create_rule_version(db_session, rule)
-        ms1 = _build_ms(db_session, org, rule, rv)
+        _build_ms(db_session, org, rule, rv)
         ms2 = MonthlySchedule(
             org_unit_id=org.id, rule_id=rule.id, rule_version_id=rv.id,
         )
@@ -141,7 +139,7 @@ class TestMonthlySchedule:
         rule = _create_rule(db_session)
         rv = _create_rule_version(db_session, rule)
         ms1 = _build_ms(db_session, org, rule, rv)
-        ms1.deleted_at = datetime.now(timezone.utc)
+        ms1.deleted_at = datetime.now(UTC)
         db_session.commit()
         rv2 = ShiftRuleVersion(
             rule_id=rule.id, version_no=2,
@@ -164,21 +162,20 @@ class TestMonthlySchedule:
         ms = _build_ms(db_session, org, rule, rv, status="draft")
         assert ms.status == "draft"
 
-    def test_generated_published_locked_timestamps(self, db_session) -> None:
+    def test_generated_published_timestamps(self, db_session) -> None:
         org = _create_org(db_session)
         rule = _create_rule(db_session)
         rv = _create_rule_version(db_session, rule)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         ms = MonthlySchedule(
             org_unit_id=org.id, rule_id=rule.id, rule_version_id=rv.id,
-            status="locked",
-            generated_at=now, published_at=now, locked_at=now,
+            status="published",
+            generated_at=now, published_at=now,
         )
         db_session.add(ms)
         db_session.commit()
         assert ms.generated_at == now
         assert ms.published_at == now
-        assert ms.locked_at == now
 
 
 class TestScheduleDay:
@@ -248,8 +245,8 @@ class TestScheduleShift:
         db_session.add(day)
         db_session.commit()
         shift_def = _create_shift_def(db_session)
-        start = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
+        end = datetime(2026, 7, 1, 8, 0, tzinfo=UTC)
         shift = ScheduleShift(
             schedule_day_id=day.id, shift_def_id=shift_def.id,
             start_at=start, end_at=end,
@@ -268,8 +265,8 @@ class TestScheduleShift:
         db_session.add(day)
         db_session.commit()
         shift_def = _create_shift_def(db_session)
-        start = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
+        end = datetime(2026, 7, 1, 8, 0, tzinfo=UTC)
         shift = ScheduleShift(
             schedule_day_id=day.id, shift_def_id=shift_def.id,
             start_at=start, end_at=end,
@@ -288,8 +285,8 @@ class TestScheduleShift:
         db_session.add(day)
         db_session.commit()
         shift_def = _create_shift_def(db_session)
-        start = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
+        end = datetime(2026, 7, 1, 8, 0, tzinfo=UTC)
         shift = ScheduleShift(
             schedule_day_id=day.id, shift_def_id=shift_def.id,
             start_at=start, end_at=end,
@@ -314,8 +311,8 @@ class TestScheduleShiftPerson:
         db_session.add(day)
         db_session.commit()
         shift_def = _create_shift_def(db_session)
-        start = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
+        end = datetime(2026, 7, 1, 8, 0, tzinfo=UTC)
         shift = ScheduleShift(
             schedule_day_id=day.id, shift_def_id=shift_def.id,
             start_at=start, end_at=end,
@@ -406,8 +403,8 @@ class TestScheduleCascadeChain:
         db_session.add_all([day1, day2])
         db_session.commit()
 
-        start = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 7, 1, 8, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
+        end = datetime(2026, 7, 1, 8, 0, tzinfo=UTC)
         shift = ScheduleShift(
             schedule_day_id=day1.id, shift_def_id=shift_def.id,
             start_at=start, end_at=end,

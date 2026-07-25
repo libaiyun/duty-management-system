@@ -1,11 +1,10 @@
 import pytest
-from fastapi.testclient import TestClient
-
 from app.models.holiday import HolidayCalendar, RefundStandard
 from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.user import SysPermission, SysRole
 from app.services.auth import create_user
+from fastapi.testclient import TestClient
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -221,6 +220,38 @@ class TestHolidayApi:
         assert data["holiday_overtime_refund_night_to_middle"] == 56
         standard = db_session.query(RefundStandard).one()
         assert standard.org_unit_id is not None
+
+    def test_view_permission_can_read_standard_without_manage_permission(
+        self, api_client: TestClient, db_session,
+    ) -> None:
+        room = OrgUnit(code="readonly-standard-room", name="只读标准机房", type="room")
+        db_session.add(room)
+        db_session.flush()
+        person = Person(
+            code="READONLY-STANDARD", name="只读人员",
+            person_type="maintenance", org_unit_id=room.id,
+        )
+        db_session.add(person)
+        db_session.flush()
+        user = create_user(
+            db_session, "readonly-standard", "password123", "只读人员", person_id=person.id,
+        )
+        permission = SysPermission(
+            code="holiday:standard:view", name="查看节假日与标准", type="api",
+        )
+        role = SysRole(code="readonly-standard-role", name="标准只读")
+        role.permissions.append(permission)
+        user.roles.append(role)
+        db_session.add_all([permission, role])
+        db_session.commit()
+        token = _login(api_client, db_session, "readonly-standard", "password123")
+
+        response = api_client.get(
+            "/api/v1/holidays/standard",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        assert response.status_code == 200
 
     def test_update_standard(self, api_client: TestClient, db_session) -> None:
         _, token = _create_admin(api_client, db_session)

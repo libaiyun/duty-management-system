@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { router } from '@/router'
+import { hasRouteAccess, router } from '@/router'
 
 describe('router', () => {
   it('defines the home route as top-level', () => {
@@ -38,9 +38,28 @@ describe('router', () => {
     expect(forbidden?.meta.title).toBe('无权访问')
   })
 
-  it('non-home leaf routes have permission code assigned', () => {
+  it('denies a protected route while permissions are unavailable', () => {
+    expect(hasRouteAccess({
+      requiresPermission: true,
+      permissionsLoaded: false,
+      permissionGranted: false,
+      personalAccessGranted: false,
+    })).toBe(false)
+  })
+
+  it('keeps personal routes available independently of function permissions', () => {
+    expect(hasRouteAccess({
+      requiresPermission: false,
+      permissionsLoaded: false,
+      permissionGranted: false,
+      personalAccessGranted: true,
+    })).toBe(true)
+  })
+
+  it('non-personal leaf routes have permission code assigned', () => {
     const routes = router.getRoutes()
-    const leafRoutes = routes.filter((r) => r.name && !r.children && r.name !== 'home' && r.name !== 'forbidden' && r.name !== 'not-found')
+    const publicNames = new Set(['home', 'schedule-table', 'swap-request', 'leave-request', 'my-cover', 'forbidden', 'not-found'])
+    const leafRoutes = routes.filter((r) => r.name && !r.children && !publicNames.has(String(r.name)))
     for (const route of leafRoutes) {
       expect(route.meta.permission).toBeDefined()
     }

@@ -1,10 +1,9 @@
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
-
 from app.core.config import AppEnvironment, ConfigError, Settings, load_settings
 from app.main import create_app
+from pydantic import ValidationError
 
 
 def test_settings_uses_dev_defaults() -> None:

@@ -22,11 +22,20 @@ class UserMeResponse(BaseModel):
     display_name: str
     status: str
     permissions: list[str] = Field(default_factory=list)
-    role_codes: list[str] = Field(default_factory=list)
     person_id: int | None = None
+    person_status: str | None = None
+    person_type: str | None = None
+    participate_schedule: bool = False
     room_id: int | None = None
     room_name: str | None = None
     can_switch_room: bool = False
+    is_superuser: bool = False
+
+
+class RoomContextResponse(BaseModel):
+    id: int
+    code: str
+    name: str
 
 
 class ChangePasswordRequest(BaseModel):

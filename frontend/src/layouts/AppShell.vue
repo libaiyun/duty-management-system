@@ -139,7 +139,18 @@ const userLabel = computed(() => {
 })
 
 const visibleMenuItems = computed(() =>
-  filterMenuByPermission(menuItems, (code) => permissionStore.hasPermission(code)),
+  filterMenuByPermission(
+    menuItems,
+    (code) => permissionStore.hasPermission(code),
+    (access) => {
+      const bound = authStore.personId !== null && authStore.personStatus === 'enabled'
+      if (access === 'bound') return bound
+      if (access === 'participating_operator') {
+        return bound && authStore.personType === 'duty_operator' && authStore.participateSchedule
+      }
+      return bound && ['maintenance', 'room_director', 'deputy_director'].includes(authStore.personType || '')
+    },
+  ),
 )
 
 onMounted(async () => {

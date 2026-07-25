@@ -1,8 +1,8 @@
 from fastapi import APIRouter
 
 from app.api.v1.routes import (
-    auth,
     approvals,
+    auth,
     exports,
     health,
     holidays,
@@ -12,8 +12,8 @@ from app.api.v1.routes import (
     roles,
     schedules,
     shift_rules,
-    shifts,
     shift_swaps,
+    shifts,
     users,
 )
 

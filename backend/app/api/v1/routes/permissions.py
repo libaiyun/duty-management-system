@@ -15,6 +15,7 @@ def get_permissions(
 ) -> ApiResponse[list[dict]]:
     perms = list_permissions(db)
     return ok([
-        {"id": p.id, "code": p.code, "name": p.name, "type": p.type}
+        {"id": p.id, "code": p.code, "name": p.name, "type": p.type,
+         "group_code": p.group_code, "group_name": p.group_name}
         for p in perms
     ])

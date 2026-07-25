@@ -12,14 +12,14 @@ describe('usePermissionStore', () => {
   it('starts with empty permissions by default', () => {
     const store = usePermissionStore()
     expect(store.hasPermission(PERMISSION_CODES.SYSTEM_USER_MANAGE)).toBe(false)
-    expect(store.hasPermission(PERMISSION_CODES.DUTY_SCHEDULE_VIEW_SELF)).toBe(false)
+    expect(store.hasPermission(PERMISSION_CODES.SCHEDULE_MONTHLY_VIEW)).toBe(false)
   })
 
   it('can set specific permissions', () => {
     const store = usePermissionStore()
-    store.setPermissions([PERMISSION_CODES.DUTY_SCHEDULE_VIEW_SELF])
+    store.setPermissions([PERMISSION_CODES.SCHEDULE_MONTHLY_VIEW])
 
-    expect(store.hasPermission(PERMISSION_CODES.DUTY_SCHEDULE_VIEW_SELF)).toBe(true)
+    expect(store.hasPermission(PERMISSION_CODES.SCHEDULE_MONTHLY_VIEW)).toBe(true)
     expect(store.hasPermission(PERMISSION_CODES.SYSTEM_USER_MANAGE)).toBe(false)
   })
 
@@ -27,7 +27,7 @@ describe('usePermissionStore', () => {
     const store = usePermissionStore()
     store.clearPermissions()
 
-    expect(store.hasPermission(PERMISSION_CODES.DUTY_SCHEDULE_VIEW_SELF)).toBe(false)
+    expect(store.hasPermission(PERMISSION_CODES.SCHEDULE_MONTHLY_VIEW)).toBe(false)
     expect(store.hasPermission(PERMISSION_CODES.SYSTEM_USER_MANAGE)).toBe(false)
   })
 

@@ -2,8 +2,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.api.deps import RequirePermission, get_db
+from app.core.exceptions import NotFoundError
+from app.models.user import SysRole
 from app.schemas.response import ApiResponse, ok
-from app.core.role_matrix import CANONICAL_ROLE_CODES
 from app.schemas.role import (
     RoleCreateRequest,
     RoleDetailResponse,
@@ -11,8 +12,7 @@ from app.schemas.role import (
     RoleResponse,
     RoleUpdateRequest,
 )
-from app.core.exceptions import ForbiddenError
-from app.services.auth import list_roles
+from app.services.auth import assign_role_permissions, create_role, list_roles, update_role
 
 router = APIRouter(prefix="/roles", tags=["roles"])
 
@@ -32,7 +32,9 @@ def create_role_endpoint(
     db: Session = Depends(get_db),
     _perm: None = Depends(RequirePermission("system:user:manage")),
 ) -> ApiResponse[RoleResponse]:
-    raise ForbiddenError(message="角色矩阵为系统预置，不能创建")
+    role = create_role(db, body.code, body.name, body.remark)
+    db.commit()
+    return ok(RoleResponse.model_validate(role))
 
 
 @router.get("/{role_id}", response_model=ApiResponse[RoleDetailResponse])
@@ -41,10 +43,8 @@ def get_role(
     db: Session = Depends(get_db),
     _perm: None = Depends(RequirePermission("system:user:manage")),
 ) -> ApiResponse[RoleDetailResponse]:
-    from app.core.exceptions import NotFoundError
-    from app.models.user import SysRole
     role = db.get(SysRole, role_id)
-    if role is None or role.code not in CANONICAL_ROLE_CODES:
+    if role is None:
         raise NotFoundError(message="角色不存在")
     return ok(RoleDetailResponse(
         id=role.id,
@@ -53,6 +53,8 @@ def get_role(
         remark=role.remark,
         status=role.status,
         permission_ids=[p.id for p in role.permissions],
+        user_ids=[u.id for u in role.users],
+        is_builtin=role.is_builtin,
     ))
 
 
@@ -63,7 +65,9 @@ def update_role_endpoint(
     db: Session = Depends(get_db),
     _perm: None = Depends(RequirePermission("system:user:manage")),
 ) -> ApiResponse[RoleResponse]:
-    raise ForbiddenError(message="角色矩阵为系统预置，不能修改")
+    role = update_role(db, role_id, body.name, body.remark, body.status, "remark" in body.model_fields_set)
+    db.commit()
+    return ok(RoleResponse.model_validate(role))
 
 
 @router.put("/{role_id}/permissions", response_model=ApiResponse[None])
@@ -73,4 +77,6 @@ def update_role_permissions(
     db: Session = Depends(get_db),
     _perm: None = Depends(RequirePermission("system:user:manage")),
 ) -> ApiResponse[None]:
-    raise ForbiddenError(message="角色权限为系统预置，不能修改")
+    assign_role_permissions(db, role_id, body.permission_ids)
+    db.commit()
+    return ok(message="角色权限分配成功")

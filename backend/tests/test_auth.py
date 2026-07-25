@@ -1,16 +1,10 @@
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
-
-from app.models.user import SysDataScope, SysPermission, SysRole, SysUser
 from app.models.organization import OrgUnit
 from app.models.person import Person
-from app.services.auth import (
-    DataScope,
-    create_user,
-    has_global_scope,
-    resolve_user_data_scopes,
-)
+from app.models.user import SysPermission, SysRole, SysUser
+from app.services.auth import create_user
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -88,6 +82,23 @@ def test_refresh_with_invalid_token(api_client: TestClient) -> None:
     assert resp.status_code == 401
 
 
+def test_disabled_user_cannot_refresh_token(api_client: TestClient, db_session) -> None:
+    user = create_user(db_session, "refresh-disabled", "password123", "停用账号")
+    db_session.commit()
+    login_resp = api_client.post(
+        "/api/v1/auth/login",
+        json={"username": user.username, "password": "password123"},
+    )
+    refresh_token = login_resp.json()["data"]["refresh_token"]
+    user.status = "disabled"
+    db_session.commit()
+
+    resp = api_client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+
+    assert resp.status_code == 401
+    assert resp.json()["code"] == "UNAUTHORIZED"
+
+
 def test_logout(api_client: TestClient) -> None:
     resp = api_client.post("/api/v1/auth/logout")
 
@@ -140,6 +151,46 @@ def test_me_with_invalid_token(api_client: TestClient) -> None:
     )
 
     assert resp.status_code == 401
+
+
+def test_room_context_list_is_available_to_system_admin_without_org_permission(
+    api_client: TestClient, db_session,
+) -> None:
+    db_session.add_all([
+        OrgUnit(code="station-context", name="台站", type="station"),
+        OrgUnit(code="room-context-a", name="第一机房", type="room"),
+        OrgUnit(code="room-context-b", name="第二机房", type="room"),
+    ])
+    role = SysRole(code="system_admin", name="系统管理员")
+    user = create_user(db_session, "room-switcher", "password123", "系统管理员")
+    user.roles.append(role)
+    db_session.add(role)
+    db_session.commit()
+
+    token = _login(api_client, "room-switcher", "password123")
+    resp = api_client.get(
+        "/api/v1/auth/rooms",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 200
+    assert [(item["code"], item["name"]) for item in resp.json()["data"]] == [
+        ("room-context-a", "第一机房"),
+        ("room-context-b", "第二机房"),
+    ]
+
+
+def test_room_context_list_rejects_normal_account(api_client: TestClient, db_session) -> None:
+    create_user(db_session, "normal-context", "password123", "普通账号")
+    db_session.commit()
+
+    token = _login(api_client, "normal-context", "password123")
+    resp = api_client.get(
+        "/api/v1/auth/rooms",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert resp.status_code == 403
 
 
 # --- M2-P1-T4: permission helpers ---
@@ -366,7 +417,7 @@ def test_reset_password_on_disabled_user(api_client: TestClient, db_session) -> 
 
 
 def test_reset_password_without_permission(api_client: TestClient, db_session) -> None:
-    admin = create_user(db_session, "admin", "password123", "管理员")
+    create_user(db_session, "admin", "password123", "管理员")
     target = create_user(db_session, "target", "targetpass", "用户")
     db_session.commit()
     token = _login(api_client, "admin", "password123")
@@ -379,11 +430,10 @@ def test_reset_password_without_permission(api_client: TestClient, db_session) -
 
     assert resp.status_code == 403
 
-
 def test_reset_password_with_wrong_permission(api_client: TestClient, db_session) -> None:
     admin = create_user(db_session, "admin", "password123", "管理员")
     target = create_user(db_session, "target", "targetpass", "用户")
-    _grant_permission(db_session, admin, "duty:schedule:view_self")
+    _grant_permission(db_session, admin, "schedule:monthly:view")
     db_session.commit()
     token = _login(api_client, "admin", "password123")
 
@@ -398,7 +448,7 @@ def test_reset_password_with_wrong_permission(api_client: TestClient, db_session
 
 def test_reset_password_worker_cannot_elevate(api_client: TestClient, db_session) -> None:
     worker = create_user(db_session, "worker", "workerpass", "普通用户")
-    _grant_permission(db_session, worker, "duty:schedule:view_self")
+    _grant_permission(db_session, worker, "schedule:monthly:view")
     db_session.commit()
     token = _login(api_client, "worker", "workerpass")
 
@@ -409,117 +459,3 @@ def test_reset_password_worker_cannot_elevate(api_client: TestClient, db_session
     )
 
     assert resp.status_code == 403
-
-
-# --- M2-P1-T5: data scope resolution ---
-
-
-def test_resolve_scopes_empty_for_no_scopes(db_session) -> None:
-    user = create_user(db_session, "user", "pass", "用户")
-    db_session.commit()
-
-    scopes = resolve_user_data_scopes(db_session, user)
-    assert scopes == []
-
-
-def test_resolve_direct_scope_self(db_session) -> None:
-    user = create_user(db_session, "user", "pass", "用户")
-    db_session.add(SysDataScope(user_id=user.id, scope_type="self"))
-    db_session.commit()
-
-    scopes = resolve_user_data_scopes(db_session, user)
-    assert len(scopes) == 1
-    assert scopes[0].scope_type == "self"
-    assert scopes[0].org_unit_id is None
-
-
-def test_resolve_direct_scope_room(db_session) -> None:
-    user = create_user(db_session, "user", "pass", "用户")
-    db_session.add(SysDataScope(user_id=user.id, scope_type="room", org_unit_id=5))
-    db_session.commit()
-
-    scopes = resolve_user_data_scopes(db_session, user)
-    assert len(scopes) == 1
-    assert scopes[0].scope_type == "room"
-    assert scopes[0].org_unit_id == 5
-
-
-def test_resolve_direct_scope_station(db_session) -> None:
-    user = create_user(db_session, "user", "pass", "用户")
-    db_session.add(SysDataScope(user_id=user.id, scope_type="station", org_unit_id=10))
-    db_session.commit()
-
-    scopes = resolve_user_data_scopes(db_session, user)
-    assert len(scopes) == 1
-    assert scopes[0].scope_type == "station"
-    assert scopes[0].org_unit_id == 10
-
-
-def test_resolve_direct_scope_all(db_session) -> None:
-    user = create_user(db_session, "user", "pass", "用户")
-    db_session.add(SysDataScope(user_id=user.id, scope_type="all"))
-    db_session.commit()
-
-    scopes = resolve_user_data_scopes(db_session, user)
-    assert len(scopes) == 1
-    assert scopes[0].scope_type == "all"
-    assert has_global_scope(scopes)
-
-
-def test_resolve_role_based_scope(db_session) -> None:
-    user = create_user(db_session, "user", "pass", "用户")
-    role = SysRole(code="room-role", name="机房角色")
-    db_session.add(role)
-    db_session.flush()
-    db_session.add(SysDataScope(role_id=role.id, scope_type="room", org_unit_id=7))
-    user.roles.append(role)
-    db_session.commit()
-
-    scopes = resolve_user_data_scopes(db_session, user)
-    assert len(scopes) == 1
-    assert scopes[0].scope_type == "room"
-    assert scopes[0].org_unit_id == 7
-
-
-def test_resolve_mixed_direct_and_role_scopes(db_session) -> None:
-    user = create_user(db_session, "user", "pass", "用户")
-    role = SysRole(code="station-role", name="台站角色")
-    db_session.add(role)
-    db_session.flush()
-    db_session.add(SysDataScope(role_id=role.id, scope_type="station", org_unit_id=3))
-    db_session.add(SysDataScope(user_id=user.id, scope_type="self"))
-    user.roles.append(role)
-    db_session.commit()
-
-    scopes = resolve_user_data_scopes(db_session, user)
-    scope_types = {s.scope_type for s in scopes}
-    assert scope_types == {"self", "station"}
-
-
-def test_resolve_multiple_direct_scopes(db_session) -> None:
-    user = create_user(db_session, "user", "pass", "用户")
-    db_session.add(SysDataScope(user_id=user.id, scope_type="self"))
-    db_session.add(SysDataScope(user_id=user.id, scope_type="room", org_unit_id=5))
-    db_session.commit()
-
-    scopes = resolve_user_data_scopes(db_session, user)
-    assert len(scopes) == 2
-
-
-def test_resolve_deduplicates_identical_scopes(db_session) -> None:
-    user = create_user(db_session, "user", "pass", "用户")
-    db_session.add(SysDataScope(user_id=user.id, scope_type="room", org_unit_id=5))
-    db_session.add(SysDataScope(user_id=user.id, scope_type="room", org_unit_id=5))
-    db_session.commit()
-
-    scopes = resolve_user_data_scopes(db_session, user)
-    assert len(scopes) == 1
-
-
-def test_has_global_scope_false(db_session) -> None:
-    user = create_user(db_session, "user", "pass", "用户")
-    db_session.add(SysDataScope(user_id=user.id, scope_type="self"))
-    db_session.commit()
-
-    scopes = resolve_user_data_scopes(db_session, user)
-    assert not has_global_scope(scopes)

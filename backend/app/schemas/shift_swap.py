@@ -11,7 +11,7 @@ class ShiftSwapCreateRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
     @model_validator(mode="after")
-    def validate_target_shift(self):
+    def validate_target_shift(self) -> "ShiftSwapCreateRequest":
         if self.swap_type == "mutual" and self.target_shift_id is None:
             raise ValueError("互换班次必须选择对方班次")
         if self.swap_type == "single_cover" and self.target_shift_id is not None:

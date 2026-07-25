@@ -8,20 +8,16 @@ import argparse
 import sys
 
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.models.user import SysRole
-from app.services.auth import create_user, seed_role_matrix
+from app.services.auth import create_user, seed_permission_system
 
 
 def cmd_create_admin(args: argparse.Namespace) -> None:
     db = SessionLocal()
     try:
-        seed_role_matrix(db)
-        role = db.query(SysRole).filter(SysRole.code == "system_admin").one()
-        user = create_user(db, args.username, args.password, args.display_name)
-        user.roles.append(role)
+        seed_permission_system(db)
+        user = create_user(db, args.username, args.password, args.display_name, is_superuser=True)
         db.flush()
         db.commit()
         print(f"Admin user created: id={user.id}, username={user.username}")

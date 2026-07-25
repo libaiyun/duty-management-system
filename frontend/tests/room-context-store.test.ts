@@ -15,15 +15,15 @@ describe('useRoomContextStore', () => {
     useAuthStore().canSwitchRoom = true
     vi.spyOn(httpClient, 'get').mockResolvedValueOnce({
       code: 'OK', message: 'success', data: [
-        { id: 1, name: '台站', type: 'station' },
-        { id: 2, name: '第一机房', type: 'room' },
-        { id: 3, name: '第二机房', type: 'room' },
+        { id: 2, code: 'room-a', name: '第一机房' },
+        { id: 3, code: 'room-b', name: '第二机房' },
       ], trace_id: '',
     })
 
     const store = useRoomContextStore()
     await store.loadRooms()
 
+    expect(httpClient.get).toHaveBeenCalledWith('/auth/rooms')
     expect(store.selectedRoomId).toBe(2)
     expect(localStorage.getItem('duty_current_room_id')).toBe('2')
   })
@@ -33,7 +33,7 @@ describe('useRoomContextStore', () => {
     createTestPinia()
     useAuthStore().canSwitchRoom = true
     vi.spyOn(httpClient, 'get').mockResolvedValueOnce({
-      code: 'OK', message: 'success', data: [{ id: 2, name: '第一机房', type: 'room' }], trace_id: '',
+      code: 'OK', message: 'success', data: [{ id: 2, code: 'room-a', name: '第一机房' }], trace_id: '',
     })
 
     const store = useRoomContextStore()

@@ -1,15 +1,14 @@
 from datetime import date, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import select
-
 from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.schedule import MonthlySchedule
 from app.models.shift import ShiftDef, ShiftRule, ShiftRuleItem, ShiftRuleVersion
-from app.models.user import SysDataScope, SysPermission, SysRole
+from app.models.user import SysPermission, SysRole
 from app.services.auth import create_shift_rule, create_user, publish_shift_rule, update_shift_rule
+from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 pytestmark = pytest.mark.usefixtures("create_tables")
 
@@ -36,7 +35,7 @@ def _create_admin(api_client: TestClient, db_session, select_room: bool = True, 
     db_session.add_all([*permissions, role])
     user.roles.append(role)
     db_session.flush()
-    db_session.add(SysDataScope(user_id=user.id, scope_type="all", org_unit_id=None))
+    user.is_superuser = True
     if with_shift_def and not db_session.scalar(select(ShiftDef).where(ShiftDef.org_unit_id == room.id)):
         db_session.add(ShiftDef(
             org_unit_id=room.id, code="default_shift", name="默认班次",
@@ -889,7 +888,6 @@ class TestScheduleGeneration:
 
     def test_multi_cycle_repeats_pattern(self, db_session) -> None:
         """M3-P1-T3: N=3 天循环 10 天，Day 4 应与 Day 1 相同"""
-        from datetime import date as _date
         from app.services.schedule import generate_schedule_from_rule
 
         org, persons = self._setup_org_with_persons(db_session)
@@ -980,6 +978,7 @@ class TestScheduleGeneration:
     def test_cross_month_continuity(self, db_session) -> None:
         """M3-P1-T3: 7 月 30 日起生成，8 月日期正确延续"""
         from datetime import date as _date
+
         from app.services.schedule import generate_schedule_from_rule
 
         org, persons = self._setup_org_with_persons(db_session)
@@ -1031,6 +1030,7 @@ class TestScheduleGeneration:
     def test_holiday_flagging(self, db_session) -> None:
         """M3-P1-T3: 节假日日期 is_legal_holiday=True, holiday_name 正确"""
         from datetime import date as _date
+
         from app.models.holiday import HolidayCalendar
         from app.services.schedule import generate_schedule_from_rule
 
@@ -1093,6 +1093,7 @@ class TestScheduleGeneration:
     def test_republish_overwrites_future(self, db_session) -> None:
         """M3-P1-T3: 重新发布刷新未来排班"""
         from datetime import date as _date
+
         from app.services.schedule import generate_schedule_from_rule
 
         org, persons = self._setup_org_with_persons(db_session)
@@ -1167,7 +1168,7 @@ class TestPersonFilter:
     """人员列表过滤参数"""
 
     def _setup_admin_with_person_permission(self, api_client: TestClient, db_session) -> str:
-        from app.models.user import SysDataScope, SysPermission, SysRole
+        from app.models.user import SysPermission, SysRole
         from app.services.auth import create_user as _cu
 
         user = _cu(db_session, "padmin", "password123", "人员管理")
@@ -1178,7 +1179,7 @@ class TestPersonFilter:
         db_session.add_all([perm_shift, perm_person, role])
         db_session.flush()
         user.roles.append(role)
-        db_session.add(SysDataScope(user_id=user.id, scope_type="all", org_unit_id=None))
+        user.is_superuser = True
         db_session.commit()
         token = _login(api_client, db_session, "padmin", "password123")
         room = db_session.scalars(select(OrgUnit).where(OrgUnit.type == "room")).first()

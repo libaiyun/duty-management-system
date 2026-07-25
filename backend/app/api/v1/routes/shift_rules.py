@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import RequirePermission, get_db, resolve_current_room_id
-from app.models.user import SysUser
 from app.core.exceptions import NotFoundError
+from app.models.user import SysUser
 from app.schemas.response import ApiResponse, ok
 from app.schemas.shift import (
     ShiftRuleCreateRequest,
@@ -168,8 +168,9 @@ def get_rule_versions(
     db: Session = Depends(get_db),
     user: SysUser = Depends(RequirePermission("shift:rule:view")),
 ) -> ApiResponse[list[ShiftRuleVersionResponse]]:
-    from app.models.shift import ShiftRuleVersion
     from sqlalchemy import select
+
+    from app.models.shift import ShiftRuleVersion
 
     if get_shift_rule(db, rule_id, resolve_current_room_id(request, db, user)) is None:
         raise NotFoundError(message="排班规则不存在")

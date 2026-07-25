@@ -2,7 +2,6 @@ from datetime import UTC, datetime
 
 import pytest
 from app.models.user import (
-    SysDataScope,
     SysPermission,
     SysRole,
     SysUser,
@@ -125,32 +124,6 @@ def test_role_permission_cascade_delete(session: Session) -> None:
 
     stmt = select(sys_role_permission)
     assert len(session.execute(stmt).all()) == 0
-
-
-def test_data_scope_with_role(session: Session) -> None:
-    role = SysRole(code="r", name="R")
-    session.add(role)
-    session.flush()
-
-    scope = SysDataScope(role_id=role.id, scope_type="self")
-    session.add(scope)
-    session.flush()
-
-    assert scope.id is not None
-    assert scope.org_unit_id is None
-
-
-def test_data_scope_with_user(session: Session) -> None:
-    user = SysUser(username="u", password_hash="h", display_name="U")
-    session.add(user)
-    session.flush()
-
-    scope = SysDataScope(user_id=user.id, scope_type="station", org_unit_id=1)
-    session.add(scope)
-    session.flush()
-
-    assert scope.scope_type == "station"
-    assert scope.org_unit_id == 1
 
 
 def test_soft_delete_user(session: Session) -> None:

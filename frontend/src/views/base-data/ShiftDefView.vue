@@ -2,7 +2,7 @@
   <section class="shift-def-view">
     <h1>班次规则</h1>
     <div class="shift-def-view__toolbar">
-      <el-button type="primary" @click="openDialog()">新增班次</el-button>
+      <el-button v-if="canManage" type="primary" @click="openDialog()">新增班次</el-button>
     </div>
     <el-table :data="shiftDefs" v-loading="loading" stripe>
       <el-table-column prop="code" label="编码" width="140" />
@@ -18,7 +18,7 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="200" fixed="right">
+      <el-table-column v-if="canManage" class-name="shift-def-view__actions" label="操作" width="200" fixed="right">
         <template #default="{ row }">
           <el-button size="small" @click="openDialog(row)">编辑</el-button>
           <el-button size="small" :type="row.status === 'enabled' ? 'warning' : 'success'" @click="toggleStatus(row)">
@@ -47,11 +47,13 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
 
 import { httpClient, resolveErrorMessage } from '@/services/http'
 import { useRoomContextStore } from '@/stores/room-context'
+import { usePermissionStore } from '@/stores/permission'
+import { PERMISSION_CODES } from '@/types/permission'
 
 interface ShiftDefItem {
   id: number
@@ -65,6 +67,8 @@ interface ShiftDefItem {
 
 const shiftDefs = ref<ShiftDefItem[]>([])
 const roomContextStore = useRoomContextStore()
+const permissionStore = usePermissionStore()
+const canManage = computed(() => permissionStore.hasPermission(PERMISSION_CODES.SHIFT_DEF_MANAGE))
 const loading = ref(false)
 const saving = ref(false)
 const dialogVisible = ref(false)
