@@ -8,7 +8,7 @@ from app.models.holiday import HolidayCalendar
 from app.models.person import Person
 from app.models.schedule import CoverAssignment, LeaveRequest, ScheduleDay, ScheduleShift, ScheduleShiftPerson
 from app.models.user import SysUser
-from app.services.approval import create_task
+from app.services.approval import cancel_pending_tasks, create_task
 from app.services.schedule import update_schedule_shift_persons
 from app.services.shift_swap import _find_approval_assignee
 
@@ -82,6 +82,12 @@ def withdraw_leave(db: Session, leave_id: int, user: SysUser, room_id: int) -> L
     if leave.status != "wait_director_approval":
         raise StateConflictError(message="当前请假申请不能撤回")
     leave.status, leave.updated_by = "withdrawn", user.id
+    cancel_pending_tasks(
+        db,
+        biz_type="leave_request",
+        biz_id=leave.id,
+        operator_user_id=user.id,
+    )
     return leave
 
 

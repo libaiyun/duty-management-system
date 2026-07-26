@@ -56,3 +56,39 @@ def complete_task(
     db.add(record)
     db.flush()
     return record
+
+
+def cancel_pending_tasks(
+    db: Session, *, biz_type: str, biz_id: int, operator_user_id: int,
+) -> None:
+    """Close outstanding workflow tasks when their business document is withdrawn.
+
+    A withdrawn document must not remain in the approval centre's todo list.
+    Keeping a cancellation record also preserves the workflow trail without
+    treating the document as approved or rejected.
+    """
+    tasks = list(db.scalars(
+        select(ApprovalTask)
+        .where(
+            ApprovalTask.biz_type == biz_type,
+            ApprovalTask.biz_id == biz_id,
+            ApprovalTask.status == "pending",
+        )
+        .with_for_update()
+    ).all())
+    for task in tasks:
+        task.status = "cancelled"
+        task.handled_at = _utcnow()
+        task.updated_by = operator_user_id
+        task.version += 1
+        snapshot = task.records[-1].snapshot_json if task.records else {}
+        db.add(ApprovalRecord(
+            task_id=task.id,
+            biz_type=task.biz_type,
+            biz_id=task.biz_id,
+            action="cancel",
+            operator_user_id=operator_user_id,
+            snapshot_json=snapshot,
+            created_by=operator_user_id,
+        ))
+    db.flush()

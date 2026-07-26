@@ -162,6 +162,23 @@ def test_applicant_can_withdraw_before_director_approval(db_session) -> None:
     assert db_session.scalar(select(ScheduleShiftPerson.person_id).where(ScheduleShiftPerson.schedule_shift_id == shifts[0].id)) == applicant.person_id
 
 
+def test_withdrawing_swap_cancels_its_pending_confirmation_task(db_session) -> None:
+    room, applicant, target, _, shifts = _fixture(db_session)
+    swap = create_swap(db_session, SimpleNamespace(
+        swap_type="single_cover", source_shift_id=shifts[0].id,
+        target_person_id=target.person_id, target_shift_id=None, reason=None,
+    ), applicant, room.id)
+
+    withdraw_or_cancel(db_session, swap.id, applicant)
+
+    task = db_session.scalar(select(ApprovalTask).where(
+        ApprovalTask.biz_type == "shift_swap", ApprovalTask.biz_id == swap.id,
+        ApprovalTask.node_code == "target_confirm",
+    ))
+    assert task is not None
+    assert task.status == "cancelled"
+
+
 def test_applicant_can_cancel_effective_swap_and_restore_final_schedule(db_session) -> None:
     room, applicant, target, director, shifts = _fixture(db_session)
     swap = create_swap(db_session, SimpleNamespace(swap_type="single_cover", source_shift_id=shifts[0].id, target_person_id=target.person_id, target_shift_id=None, reason=None), applicant, room.id)

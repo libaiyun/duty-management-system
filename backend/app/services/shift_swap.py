@@ -16,7 +16,7 @@ from app.models.user import (
     sys_user_role,
 )
 from app.schemas.shift_swap import ShiftSwapCreateRequest
-from app.services.approval import complete_task, create_task
+from app.services.approval import cancel_pending_tasks, complete_task, create_task
 from app.services.schedule import update_schedule_shift_persons
 
 OPEN_STATUSES = ("draft", "wait_target_confirm", "wait_director_approval")
@@ -250,6 +250,12 @@ def withdraw_or_cancel(
         _assert_swap_not_historical(db, swap)
     swap.status = "cancelled" if cancel else "withdrawn"
     swap.updated_by = user.id
+    cancel_pending_tasks(
+        db,
+        biz_type="shift_swap",
+        biz_id=swap.id,
+        operator_user_id=user.id,
+    )
     if cancel:
         update_schedule_shift_persons(
             db, source.schedule_day.schedule, source,

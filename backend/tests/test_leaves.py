@@ -124,6 +124,24 @@ def test_only_applicant_can_withdraw_pending_leave(db_session):
         withdraw_leave(db_session, leave.id, cover_user, room.id)
 
 
+def test_withdrawing_leave_cancels_its_pending_approval_task(db_session):
+    room, applicant, _cover_user, _director, _operator, _cover_person, shift = _fixture(db_session)
+    leave = create_leave(
+        db_session,
+        SimpleNamespace(schedule_shift_id=shift.id, leave_type="personal", reason=None),
+        applicant,
+        room.id,
+    )
+
+    withdraw_leave(db_session, leave.id, applicant, room.id)
+
+    task = db_session.scalar(select(ApprovalTask).where(
+        ApprovalTask.biz_type == "leave_request", ApprovalTask.biz_id == leave.id,
+    ))
+    assert task is not None
+    assert task.status == "cancelled"
+
+
 def test_cover_rejection_returns_leave_to_pending_arrangement(db_session):
     room, applicant, cover_user, director, _operator, cover_person, shift = _fixture(db_session)
     leave = create_leave(db_session, SimpleNamespace(schedule_shift_id=shift.id, leave_type="personal", reason=None), applicant, room.id)
