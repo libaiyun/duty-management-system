@@ -5,7 +5,9 @@ from app.models.holiday import HolidayCalendar, RefundStandard
 from app.models.organization import OrgUnit
 from app.models.person import Person
 from app.models.schedule import (
+    CoverAssignment,
     DutyChangeLedger,
+    LeaveRequest,
     MonthlySchedule,
     ScheduleChangeLog,
     ScheduleDay,
@@ -25,6 +27,8 @@ __all__ = [
     "ExportTask",
     "HolidayCalendar",
     "DutyChangeLedger",
+    "CoverAssignment",
+    "LeaveRequest",
     "ShiftSwap",
     "RefundStandard",
     "MonthlySchedule",

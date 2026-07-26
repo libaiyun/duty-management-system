@@ -8,13 +8,14 @@ from sqlalchemy.sql.elements import ColumnElement
 from app.api.deps import RequirePermission, get_authenticated_user, get_db, get_page_params, resolve_current_room_id
 from app.core.exceptions import NotFoundError
 from app.models.approval import ApprovalRecord, ApprovalTask
-from app.models.schedule import ShiftSwap
+from app.models.schedule import LeaveRequest, ShiftSwap
 from app.models.user import SysUser
 from app.schemas.approval import ApprovalActionRequest, ApprovalRecordResponse, ApprovalTaskResponse
 from app.schemas.pagination import PageParams, PageResponse
 from app.schemas.response import ApiResponse, ok
 from app.services.approval import complete_task
 from app.services.auth import check_user_permission
+from app.services.leave import decide_leave
 from app.services.shift_swap import director_decide
 
 router = APIRouter(prefix="/approval-tasks", tags=["approval-tasks"])
@@ -95,8 +96,18 @@ def _act(task_id: int, payload: ApprovalActionRequest, action: str, request: Req
         db, task_id, user.id, action=action, opinion=payload.opinion, snapshot=latest_snapshot,
         allow_room_approval=task.node_code == "director_approval",
     )
-    if task.biz_type == "shift_swap" and task.node_code == "director_approval" and db.get(ShiftSwap, task.biz_id) is not None:
+    swap = db.get(ShiftSwap, task.biz_id) if task.biz_type == "shift_swap" and task.node_code == "director_approval" else None
+    # ``biz_type``/``biz_id`` are intentionally generic so that the approval
+    # centre can retain historical or externally-created tasks.  Only invoke a
+    # domain state machine when this task can be proved to be the task created
+    # by that business document.  Otherwise an unrelated record that happens
+    # to reuse the same numeric id could turn a valid generic approval into a
+    # misleading 404/state-conflict response.
+    if swap is not None and latest_snapshot.get("biz_no") == swap.biz_no:
         director_decide(db, task.biz_id, user, approve=action == "approve", opinion=payload.opinion)
+    leave = db.get(LeaveRequest, task.biz_id) if task.biz_type == "leave_request" and task.node_code == "director_approval" else None
+    if leave is not None and latest_snapshot.get("biz_no") == leave.biz_no:
+        decide_leave(db, task.biz_id, user, approve=action == "approve")
     db.commit()
     db.refresh(record.task)
     return ok(_response(record.task, record.opinion))

@@ -186,6 +186,7 @@ def get_legal_holidays(db: Session, dates: list[date]) -> dict[date, str]:
 def update_schedule_shift_persons(
     db: Session, schedule: MonthlySchedule, shift: ScheduleShift, person_ids: list[int], remark: str | None,
     *, change_type: str = "manual", source_biz_no: str | None = None, actor_id: int | None = None,
+    allowed_person_types: set[str] | None = None,
 ) -> ScheduleShift:
     """Replace one shift's final staff and append a traceable personnel ledger."""
     if not person_ids or len(person_ids) != len(set(person_ids)):
@@ -204,12 +205,14 @@ def update_schedule_shift_persons(
     if before_person_ids == person_ids:
         return shift
     persons = list(db.scalars(select(Person).where(Person.id.in_(person_ids))).all())
+    allowed_person_types = allowed_person_types or {"duty_operator"}
     if len(persons) != len(person_ids) or any(
         p.org_unit_id != schedule.org_unit_id or p.status != "enabled"
-        or not p.participate_schedule or p.person_type != "duty_operator"
+        or (p.person_type == "duty_operator" and not p.participate_schedule)
+        or p.person_type not in allowed_person_types
         for p in persons
     ):
-        raise BusinessRuleError(message="值班人员必须是当前机房启用且参与排班的值机员")
+        raise BusinessRuleError(message="值班人员不符合当前业务的机房、状态或人员类型要求")
     baseline_ids = list(db.scalars(
         select(ScheduleShiftBaselinePerson.person_id)
         .where(ScheduleShiftBaselinePerson.schedule_shift_id == shift.id)

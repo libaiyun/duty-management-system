@@ -178,6 +178,47 @@ class ShiftSwap(BaseModel):
     __table_args__ = (Index("ix_shift_swap_applicant_status", "applicant_person_id", "status"), Index("ix_shift_swap_target_status", "target_person_id", "status"))
 
 
+class LeaveRequest(BaseModel):
+    """A duty operator's request to be absent from one published shift."""
+
+    __tablename__ = "leave_request"
+    biz_no: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    applicant_person_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("person.id", ondelete="RESTRICT"), nullable=False)
+    schedule_shift_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("schedule_shift.id", ondelete="RESTRICT"), nullable=False)
+    leave_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="wait_director_approval")
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    applicant = relationship("Person", foreign_keys=[applicant_person_id])
+    schedule_shift = relationship("ScheduleShift", foreign_keys=[schedule_shift_id])
+
+    __table_args__ = (
+        Index("ix_leave_request_applicant_status", "applicant_person_id", "status"),
+        Index("ix_leave_request_shift_status", "schedule_shift_id", "status"),
+    )
+
+
+class CoverAssignment(BaseModel):
+    """A proposed cover arrangement for an approved leave request."""
+
+    __tablename__ = "cover_assignment"
+    biz_no: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    leave_request_id: Mapped[int] = mapped_column(BigInteger, ForeignKey("leave_request.id", ondelete="RESTRICT"), nullable=False)
+    cover_person_id: Mapped[int | None] = mapped_column(BigInteger, ForeignKey("person.id", ondelete="RESTRICT"), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_arrangement")
+    remark: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    leave_request = relationship("LeaveRequest", foreign_keys=[leave_request_id])
+    cover_person = relationship("Person", foreign_keys=[cover_person_id])
+
+    __table_args__ = (
+        Index("ix_cover_assignment_leave_status", "leave_request_id", "status"),
+        Index("ix_cover_assignment_person_status", "cover_person_id", "status"),
+    )
+
+
 class ScheduleChangeLog(BaseModel):
     """Immutable record of one manual staffing adjustment."""
 

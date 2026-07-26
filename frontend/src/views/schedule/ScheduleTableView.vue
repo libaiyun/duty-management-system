@@ -125,6 +125,7 @@
         <p v-if="shift.pending_change_summary">{{ shift.pending_change_summary }}</p>
         <div class="schedule-table-view__detail-actions">
           <el-button v-if="canInitiateSwap && isMyShift(shift) && !isHistory(detailDate)" link type="primary" @click="openSwap(shift)">发起换班</el-button>
+          <el-button v-if="canInitiateSwap && isMyShift(shift) && !isHistory(detailDate) && !isLegalHoliday(detailDate)" link type="primary" @click="openLeave(shift)">发起请假</el-button>
           <el-button v-if="canEditShift(shift) && !isHistory(detailDate)" link type="primary" @click="openEditor(shift)">编辑最终排班</el-button>
           <el-button v-if="canCorrectHistory && isHistory(detailDate)" link type="primary" @click="openHistoricalCorrection(shift)">历史修正</el-button>
         </div>
@@ -316,6 +317,7 @@ function isHistory(day: string): boolean {
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
   return day < today
 }
+function isLegalHoliday(day: string): boolean { return Boolean(dayFor(day)?.is_legal_holiday) }
 function changeLabel(shift?: ScheduleShift): string {
   if (!shift?.effective_change_summary) return ''
   const type = shift?.change_types?.[0]
@@ -371,6 +373,10 @@ async function publishSchedule(): Promise<void> {
 function openSwap(shift?: ScheduleShift): void {
   if (!shift) return
   void router.push({ path: '/swap-request', query: { source_shift_id: String(shift.id) } })
+}
+function openLeave(shift?: ScheduleShift): void {
+  if (!shift) return
+  void router.push({ path: '/leave-request', query: { source_shift_id: String(shift.id) } })
 }
 function showPlaceholder(action: string): void {
   ElMessage.info(`${action}功能将在后续任务中开放`)

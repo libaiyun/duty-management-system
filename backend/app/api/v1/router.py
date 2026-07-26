@@ -6,6 +6,7 @@ from app.api.v1.routes import (
     exports,
     health,
     holidays,
+    leaves,
     org_units,
     permissions,
     persons,
@@ -31,5 +32,7 @@ api_router.include_router(persons.router, tags=["persons"])
 api_router.include_router(shifts.router, tags=["shifts"])
 api_router.include_router(shift_rules.router, tags=["shift-rules"])
 api_router.include_router(holidays.router, tags=["holidays"])
+api_router.include_router(leaves.router, tags=["leaves"])
+api_router.include_router(leaves.covers_router, tags=["cover-assignments"])
 api_router.include_router(schedules.router, tags=["schedules"])
 api_router.include_router(shift_swaps.router, tags=["shift-swaps"])

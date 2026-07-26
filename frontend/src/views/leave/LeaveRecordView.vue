@@ -1,0 +1,14 @@
+<template><section><h1>请假记录</h1><el-table :data="items" v-loading="loading" border><el-table-column prop="biz_no" label="请假单号" min-width="180"/><el-table-column prop="applicant_name" label="申请人"/><el-table-column prop="duty_date" label="日期"/><el-table-column prop="status" label="审批状态"/><el-table-column prop="cover_status" label="顶班状态"/><el-table-column label="操作" width="140"><template #default="{row}"><el-button v-if="row.cover_status==='pending_arrangement'||row.cover_status==='rearrange'" link type="primary" @click="arrange(row.cover_assignment_id)">安排顶班</el-button><el-button v-if="row.cover_status==='effective'" link type="danger" @click="cancel(row.cover_assignment_id)">作废顶班</el-button></template></el-table-column></el-table><el-dialog v-model="dialog" title="安排顶班"><el-select v-model="personId" placeholder="选择顶班人"><el-option v-for="p in persons" :key="p.id" :value="p.id" :label="p.eligible?`${p.name}（${p.duty_summary}；${p.cover_summary}）`:`${p.name}（${p.disabled_reason}）`" :disabled="!p.eligible"/></el-select><template #footer><el-button @click="dialog=false">取消</el-button><el-button type="primary" @click="submit">发送确认</el-button></template></el-dialog></section></template>
+<script setup lang="ts">
+import { onMounted, ref } from 'vue'
+import { ElMessage } from 'element-plus'
+import { httpClient, resolveErrorMessage } from '@/services/http'
+interface Leave { biz_no: string; applicant_name: string; duty_date: string; status: string; cover_status?: string; cover_assignment_id?: number }
+interface Person { id: number; name: string; eligible: boolean; disabled_reason?: string; duty_summary?: string; cover_summary?: string }
+const items = ref<Leave[]>([]); const persons = ref<Person[]>([]); const loading = ref(false); const dialog = ref(false); const coverId = ref<number>(); const personId = ref<number>()
+async function load() { loading.value = true; try { items.value = (await httpClient.get<{items: Leave[]}>('/leaves?view=room&page_size=100')).data.items } catch (e) { ElMessage.error(resolveErrorMessage(e, '加载请假记录失败')) } finally { loading.value = false } }
+async function arrange(id: number) { coverId.value = id; personId.value = undefined; try { persons.value = (await httpClient.get<Person[]>(`/cover-assignments/eligible-persons?cover_id=${id}`)).data; dialog.value = true } catch (e) { ElMessage.error(resolveErrorMessage(e, '加载顶班候选人失败')) } }
+async function submit() { if (!coverId.value || !personId.value) return; try { await httpClient.post(`/cover-assignments/${coverId.value}/arrange`, { cover_person_id: personId.value }); ElMessage.success('已发送顶班确认'); dialog.value = false; await load() } catch (e) { ElMessage.error(resolveErrorMessage(e, '安排失败')) } }
+async function cancel(id: number) { try { await httpClient.post(`/cover-assignments/${id}/cancel`, { reason: '管理端作废顶班' }); ElMessage.success('顶班已作废'); await load() } catch (e) { ElMessage.error(resolveErrorMessage(e, '作废失败')) } }
+onMounted(load)
+</script>

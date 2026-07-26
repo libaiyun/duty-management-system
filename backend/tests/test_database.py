@@ -109,7 +109,7 @@ def test_alembic_upgrade_head_creates_current_permission_schema(
         }
 
         with engine.connect() as connection:
-            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "baseline_20260718"
+            assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "m4p3_leave_cover_20260726"
 
             roles = {
                 code: role_id

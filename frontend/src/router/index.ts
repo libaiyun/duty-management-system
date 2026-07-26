@@ -25,6 +25,9 @@ const CUSTOM_VIEWS: Record<string, unknown> = {
   'export-history': () => import('@/views/schedule/ExportHistoryView.vue'),
   'approval-center': () => import('@/views/approval/ApprovalCenterView.vue'),
   'swap-request': () => import('@/views/swap/ShiftSwapView.vue'),
+  'leave-request': () => import('@/views/leave/LeaveRequestView.vue'),
+  'my-cover': () => import('@/views/leave/MyCoverView.vue'),
+  'leave-records': () => import('@/views/leave/LeaveRecordView.vue'),
 }
 
 function buildRoutes(items: MenuItem[]): RouteRecordRaw[] {
